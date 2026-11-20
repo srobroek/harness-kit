@@ -352,6 +352,9 @@ describe("agent registration (vendored agents.ts)", () => {
       ["id", { id: "acme.agent-a" }],
       ["package target", { source: { target: "@scope/plug-agent-a" } }],
       ["bare package target", { source: { target: "agent-a" } }],
+      ["versioned package target", { source: { target: "@scope/plug-agent-a@1.2.3" } }],
+      ["git target with ref and path", { source: { target: "github:owner/repo#main::path:plugins/agent-a" } }],
+      ["local path file", { source: { path: "/x/plugins/agent-a.js" } }],
       ["local path", { source: { path: "/x/plugins/agent-a/index.js" } }],
     ])("an owner listed by %s counts as installed", async (_name, entry) => {
       const { files, registerAgents } = await setup()
@@ -363,6 +366,10 @@ describe("agent registration (vendored agents.ts)", () => {
     test.each([
       ["a different id prefix", { id: "other.agent-a" }],
       ["a longer name", { source: { target: "@scope/agent-ab" } }],
+      ["a hyphen-suffixed id", { id: "acme.agent-a-extra" }],
+      ["a hyphen-suffixed package target", { source: { target: "@scope/agent-a-extra" } }],
+      ["a hyphen-suffixed prefixed target", { source: { target: "@scope/plug-agent-a-extra@1.0.0" } }],
+      ["a hyphen-suffixed local path", { source: { path: "/x/plugins/agent-a-extra/index.js" } }],
       ["an unrelated plugin", { id: "acme.delivery", source: { target: "x/delivery" } }],
     ])("%s does not count as the owner", async (_name, entry) => {
       const { files, registerAgents } = await setup()

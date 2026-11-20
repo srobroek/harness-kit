@@ -114,7 +114,7 @@ export function listsPlugin(listed: unknown, name: string, match: PluginMatch = 
 	const entries = Array.isArray(listed) ? listed : (listed as { data?: unknown } | undefined)?.data;
 	if (!Array.isArray(entries)) return false;
 	const prefixes = (match.packagePrefixes ?? []).map(escapeRegExp).join("|");
-	const target = new RegExp(`(^|[/:@])${prefixes ? `(?:${prefixes})?` : ""}${escapeRegExp(name)}\\b`);
+	const target = new RegExp(`(^|[/:@])${prefixes ? `(?:${prefixes})?` : ""}${escapeRegExp(name)}(?=$|[@/#:.])`);
 	const names = (value: unknown) => typeof value === "string" && target.test(value);
 	return (entries as { id?: unknown; source?: { target?: unknown; path?: unknown } }[]).some(
 		(entry) => entry?.id === `${match.idPrefix ?? ""}${name}` || names(entry?.source?.target) || names(entry?.source?.path),

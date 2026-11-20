@@ -82,7 +82,7 @@ An item names a file without its extension (`agents/x`) or a directory (`skills/
   | --- | --- | --- |
   | `owners` | fallback | Agent id to the owner plugin's name, such as `{ researcher: "agent-researcher" }`. Ids not listed behave as in the default mode. |
   | `plugin` | fallback | The host's `ctx.plugin`. The fallback skips its copy when `plugin.list` reports the owner, or when the id already exists. Without `plugin`, or when `list` fails or takes longer than `listTimeoutMs` (default 2000), the owner counts as not installed. |
-  | `pluginMatch` | fallback | How an owner name matches a `plugin.list` entry: `idPrefix` (the entry's `id` equals `idPrefix + name`) and `packagePrefixes` (a package target or local path contains `name` or `prefix + name`). Both default to no prefix. |
+  | `pluginMatch` | fallback | How an owner name matches a `plugin.list` entry: `idPrefix` (the entry's `id` equals `idPrefix + name`) and `packagePrefixes` (a package target or local path has `name` or `prefix + name` as a whole segment, ended by the end of the string or one of `@ / # : .`, so `name-extra` does not match). Both default to no prefix. |
   | `role: "owner"` | owner | Replaces an existing copy whose prompt equals its own: permissions and model are dropped, and so is the `fallbackHeader` request header if set. Any other existing agent is layered over: `apply` gets `created = false`, and the default `apply` fills only missing fields. |
   | `fallbackHeader` | owner | Name of the request header that marks a model fallback, such as `x-opencode-model-fallback` in opencode-plugins. Default: none. |
 
