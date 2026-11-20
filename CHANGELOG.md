@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/srobroek/harness-kit/compare/v1.0.0...v1.0.1) (2026-11-20)
+
+### Bug Fixes
+
+* declare @visulima/yaml as a peer; the Renovate preset extends config:recommended ([41cc6bc](https://github.com/srobroek/harness-kit/commit/41cc6bca387de06de27b052e5638535fee57e823))
+
 ## 1.0.0 (2026-11-20)
 
 ### Features
