@@ -405,6 +405,14 @@ describe("agent registration (vendored agents.ts)", () => {
       expect(registration.replaced).toEqual([])
     })
 
+    test("owner layers over an agent with a different prompt: fills missing metadata, keeps existing fields", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      host.agents.set("a", { system: "mine", model: { id: "m" } })
+      await registerAgents(host.ctx.agent, files, owner())
+      expect(host.agents.get("a")).toEqual({ system: "mine", model: { id: "m" }, description: "Owner.", mode: "subagent" })
+    })
+
     test("owner registers a new agent normally", async () => {
       const { files, registerAgents } = await setup()
       const host = createFakeContext()
