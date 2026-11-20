@@ -275,4 +275,174 @@ describe("agent registration (vendored agents.ts)", () => {
     expect(host.agents.get("a")).toEqual({ shaped: "a" })
     expect(host.agents.get("b")).toEqual({ system: "own" })
   })
+
+  describe("owner-wins mode", () => {
+    const FALLBACK_HEADER = "x-fallback"
+    const MATCH = { idPrefix: "acme.", packagePrefixes: ["plug-"] }
+    const owners = { a: "agent-a" }
+    const listing = (list: () => Promise<unknown>) => ({ list })
+    const installed = listing(async () => ({ data: [{ id: "acme.agent-a" }] }))
+    const absent = listing(async () => ({ data: [] }))
+    const setup = async (prompt = "Prompt") => {
+      const mod = await load()
+      writeAgent("a", `---\ndescription: Owner.\nmode: subagent\n---\n${prompt}\n`)
+      writeAgent("b", "Other\n")
+      return { ...mod, files: mod.loadAgentFiles(demo("opencode")) }
+    }
+    const fallback = (plugin: { list(): Promise<unknown> }, extra = {}) => ({ owners, plugin, pluginMatch: MATCH, debug: () => {}, ...extra })
+    const owner = (extra = {}) => ({ role: "owner" as const, fallbackHeader: FALLBACK_HEADER, debug: () => {}, ...extra })
+    const copyDraft = {
+      system: "Prompt",
+      description: "stale",
+      mode: "primary",
+      model: { id: "m" },
+      permissions: [{ action: "read" }],
+      request: { headers: { "x-role": "standard", [FALLBACK_HEADER]: "p/m" } },
+    }
+
+    test("fallback skips its copy when the owner is installed, and registers the unowned agents", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      const registration = await registerAgents(host.ctx.agent, files, fallback(installed))
+      expect([...host.agents.keys()]).toEqual(["b"])
+      expect(registration.skipped).toEqual(["a"])
+    })
+
+    test("fallback registers its copy when the owner is absent", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      await registerAgents(host.ctx.agent, files, fallback(absent))
+      expect(host.agents.get("a")?.system).toBe("Prompt")
+    })
+
+    test("fallback never replaces an existing owned id, even when the owner is not listed", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext({ existingAgents: ["a"] })
+      const registration = await registerAgents(host.ctx.agent, files, fallback(absent))
+      expect(host.agents.get("a")).toEqual({ system: "own" })
+      expect(registration.skipped).toEqual(["a"])
+    })
+
+    test.each([
+      ["rejects", async () => Promise.reject(new Error("down"))],
+      ["never answers", () => new Promise<unknown>(() => {})],
+    ])("fallback treats plugin.list that %s as owner not installed", async (_name, list) => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      await registerAgents(host.ctx.agent, files, fallback({ list }, { listTimeoutMs: 5 }))
+      expect(host.agents.get("a")?.system).toBe("Prompt")
+    })
+
+    test("fallback without a plugin host cannot see the owner and registers its copy", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      await registerAgents(host.ctx.agent, files, { owners, debug: () => {} })
+      expect(host.agents.has("a")).toBe(true)
+    })
+
+    test("fallback does not call plugin.list when no file is owned", async () => {
+      const { files, registerAgents } = await setup()
+      let calls = 0
+      const host = createFakeContext()
+      await registerAgents(host.ctx.agent, files, fallback(listing(async () => void calls++), { owners: { zzz: "agent-a" } }))
+      expect(calls).toBe(0)
+    })
+
+    test.each([
+      ["id", { id: "acme.agent-a" }],
+      ["package target", { source: { target: "@scope/plug-agent-a" } }],
+      ["bare package target", { source: { target: "agent-a" } }],
+      ["local path", { source: { path: "/x/plugins/agent-a/index.js" } }],
+    ])("an owner listed by %s counts as installed", async (_name, entry) => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      await registerAgents(host.ctx.agent, files, fallback(listing(async () => [entry])))
+      expect(host.agents.has("a")).toBe(false)
+    })
+
+    test.each([
+      ["a different id prefix", { id: "other.agent-a" }],
+      ["a longer name", { source: { target: "@scope/agent-ab" } }],
+      ["an unrelated plugin", { id: "acme.delivery", source: { target: "x/delivery" } }],
+    ])("%s does not count as the owner", async (_name, entry) => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      await registerAgents(host.ctx.agent, files, fallback(listing(async () => [entry])))
+      expect(host.agents.has("a")).toBe(true)
+    })
+
+    test("owner replaces a fallback copy with a fresh registration", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      host.agents.set("a", structuredClone(copyDraft))
+      const registration = await registerAgents(host.ctx.agent, files, owner())
+      expect(host.agents.get("a")).toEqual({
+        system: "Prompt",
+        description: "Owner.",
+        mode: "subagent",
+        permissions: [],
+        request: { headers: { "x-role": "standard" } },
+      })
+      expect(registration.replaced).toEqual(["a"])
+      expect(registration.skipped).toEqual([])
+    })
+
+    test("owner replaces a copy without request headers", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      host.agents.set("a", { system: "Prompt", model: { id: "m" } })
+      await registerAgents(host.ctx.agent, files, owner())
+      expect(host.agents.get("a")?.model).toBeUndefined()
+      expect(host.agents.get("a")?.request).toBeUndefined()
+    })
+
+    test("owner layers over an agent with a different prompt and keeps its fields", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      host.agents.set("a", { system: "mine", description: "Mine.", mode: "primary", model: { id: "m" } })
+      const registration = await registerAgents(host.ctx.agent, files, owner())
+      expect(host.agents.get("a")).toEqual({ system: "mine", description: "Mine.", mode: "primary", model: { id: "m" } })
+      expect(registration.replaced).toEqual([])
+    })
+
+    test("owner registers a new agent normally", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      await registerAgents(host.ctx.agent, files, owner())
+      expect(host.agents.get("a")).toEqual({ description: "Owner.", mode: "subagent", system: "Prompt" })
+    })
+
+    test("a custom apply on the owner side receives created=false for layering and true for a replaced copy", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      host.agents.set("a", { system: "Prompt" })
+      host.agents.set("b", { system: "mine" })
+      const seen: string[] = []
+      await registerAgents(host.ctx.agent, files, owner({ apply: (_d: unknown, file: { id: string }, created: boolean) => void seen.push(`${file.id}:${created}`) }))
+      expect(seen).toEqual(["a:true", "b:false"])
+    })
+
+    test.each(["fallback first", "owner first"])("either load order leaves one agent with the owner's fields: %s", async (order) => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext()
+      const runFallback = () => registerAgents(host.ctx.agent, files, fallback(absent))
+      const runOwner = () => registerAgents(host.ctx.agent, files, owner())
+      if (order === "fallback first") {
+        await runFallback()
+        await runOwner()
+      } else {
+        await runOwner()
+        await runFallback()
+      }
+      expect(host.agents.get("a")).toEqual({ description: "Owner.", mode: "subagent", system: "Prompt" })
+    })
+
+    test("debug accepts a host logger object", async () => {
+      const { files, registerAgents } = await setup()
+      const host = createFakeContext({ existingAgents: ["a"] })
+      const lines: string[] = []
+      await registerAgents(host.ctx.agent, files, { debug: { debug: (line: string) => void lines.push(line) } })
+      expect(lines).toHaveLength(1)
+    })
+  })
 })
