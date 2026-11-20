@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/srobroek/harness-kit/compare/v1.0.1...v1.1.0) (2026-11-20)
+
+### Features
+
+* vendor runtime modules into harness trees ([21a0fdf](https://github.com/srobroek/harness-kit/commit/21a0fdf574c0b8fbd0cad61b0ac67313eed46875))
+
 ## [1.0.1](https://github.com/srobroek/harness-kit/compare/v1.0.0...v1.0.1) (2026-11-20)
 
 ### Bug Fixes
