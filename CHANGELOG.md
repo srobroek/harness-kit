@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/srobroek/harness-kit/compare/v1.2.0...v1.3.0) (2026-11-20)
+
+### Features
+
+* owner-wins mode for registerAgents ([685b549](https://github.com/srobroek/harness-kit/commit/685b5491908ba4c89c3cef3b591df5ea6ed97d3f))
+
 ## [1.2.0](https://github.com/srobroek/harness-kit/compare/v1.1.0...v1.2.0) (2026-11-20)
 
 ### Features
