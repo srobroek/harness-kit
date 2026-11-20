@@ -1,0 +1,11 @@
+{
+  "marketplace": {
+    "name": "fixture-plugins",
+    "description": "Fixture marketplace.",
+    "owner": { "name": "Fixture Owner" }
+  },
+  "commonDirs": ["skills", "rules", "templates"],
+  "kinds": ["skills", "agents", "commands", "rules", "templates", "styles", "hooks", "tools", "extensions", "mcp"],
+  "generatedBy": "scripts/build.ts",
+  "claude": { "author": { "name": "Fixture Owner" }, "license": "UNLICENSED" }
+}

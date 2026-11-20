@@ -1,0 +1,40 @@
+# AGENTS.md
+
+harness-kit is the shared build toolkit for multi-harness agent plugin repos. It is published to npm as `@srobroek/harness-kit`. TypeScript source runs under bun; there is no build step.
+
+## Layout
+
+- `src/config.ts`: harness-kit.json schema, defaults, validation.
+- `src/generate.ts`: reads `plugins/<name>/`, renders every generated file, detects drift.
+- `src/cli.ts`: the `harness-kit` command. `src/update.ts`, `src/validate-claude.ts`, `src/workflow-refs.ts` back its commands.
+- `release.config.js`, `tsconfig.base.json`: presets that consumers extend. `default.json`: the Renovate preset.
+- `.github/workflows/`: `ci.yml` and `publish.yml` are this repo's own; `check.yml` and `release.yml` are reusable workflows for consumers.
+- `templates/`: files consumers copy.
+- `tests/fixtures/repo`: the plugin repo the tests copy and generate.
+
+## Commands
+
+- `npm ci`, then `bun test` and `npx tsc`.
+- `npm run pack-check`: packs the tarball, then installs it with `npm ci` and with `bun install` and runs the CLI from each.
+
+## Rules
+
+- Generated output must stay byte-stable. Any change to `generate.ts` that alters output for an existing config is a breaking change: new behavior goes behind a config key whose default keeps the old bytes, or it ships in a major version.
+- Constants that differ between repos belong in harness-kit.json, validated in `config.ts`, with an error naming the field.
+- No runtime dependencies. Node and bun built-ins only.
+- The package files list is `src`, `tsconfig.base.json`, `release.config.js`. Tests and fixtures never ship.
+- Package version and the reusable workflow tags are the same `vX.Y.Z`. Do not split the package.
+- Commits follow Conventional Commits; semantic-release derives the version from them.
+- Never create, print or store an npm token. Publishing is OIDC only, from `publish.yml`.
+
+## First publish
+
+Trusted publishing needs an existing package, so v1.0.0 is published by hand once, from a clone at the release commit:
+
+1. `npm login` (session login; no token is stored).
+2. `npm publish --access public --provenance=false` (provenance only works from CI).
+3. Register the trusted publisher: `npm trust github @srobroek/harness-kit --file publish.yml --repo srobroek/harness-kit --allow-publish` (npm 11.15 or later, 2FA on), or npmjs.com > the package > Settings > Trusted publishing > GitHub Actions, repository `srobroek/harness-kit`, workflow `publish.yml`.
+4. `gh variable set RELEASE_ENABLED --body true --repo srobroek/harness-kit`.
+5. `npm logout`.
+
+A new trusted publisher expires unless its first CI publish succeeds within 2 days, so merge a releasable commit soon after step 3.

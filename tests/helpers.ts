@@ -1,0 +1,39 @@
+import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+
+export const FIXTURE = path.join(import.meta.dir, "fixtures", "repo")
+export const CLI = path.join(import.meta.dir, "..", "src", "cli.ts")
+
+const made: string[] = []
+
+export function tempDir(prefix = "harness-kit-test-"): string {
+  const dir = mkdtempSync(path.join(process.env.TMPDIR ?? tmpdir(), prefix))
+  made.push(dir)
+  return dir
+}
+
+export function fixtureCopy(): string {
+  const dir = tempDir()
+  cpSync(FIXTURE, dir, { recursive: true })
+  return dir
+}
+
+export function cleanup(): void {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true })
+}
+
+export function script(file: string, body: string): void {
+  writeFileSync(file, `#!/bin/sh\n${body}\n`)
+  chmodSync(file, 0o755)
+}
+
+export function runCli(args: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
+  const run = Bun.spawnSync([process.execPath, CLI, ...args], {
+    cwd: options.cwd,
+    env: { ...process.env, ...options.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  return { code: run.exitCode, out: run.stdout.toString(), err: run.stderr.toString() }
+}

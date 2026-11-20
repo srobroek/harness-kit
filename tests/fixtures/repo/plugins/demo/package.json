@@ -1,0 +1,22 @@
+{
+  "name": "demo",
+  "version": "1.2.3",
+  "private": true,
+  "agent-plugins": {
+    "description": "Fixture plugin for the generator tests.",
+    "category": "development",
+    "harnesses": [
+      "opencode",
+      "claude",
+      "omp"
+    ],
+    "scope": "work",
+    "discrepancies": "The fixture binds differently in each harness.",
+    "options": {
+      "greeting": {
+        "description": "Word the demo template opens with.",
+        "default": "hello"
+      }
+    }
+  }
+}

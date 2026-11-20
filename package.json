@@ -1,0 +1,82 @@
+{
+  "name": "@srobroek/harness-kit",
+  "version": "0.0.0",
+  "description": "Shared build tooling for multi-harness agent plugin repos: generator, version stamping, Claude validation, presets and CI workflows.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/srobroek/harness-kit.git"
+  },
+  "homepage": "https://github.com/srobroek/harness-kit#readme",
+  "bugs": {
+    "url": "https://github.com/srobroek/harness-kit/issues"
+  },
+  "type": "module",
+  "bin": {
+    "harness-kit": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./release.config.js": "./release.config.js"
+  },
+  "files": [
+    "src",
+    "tsconfig.base.json",
+    "release.config.js"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=24.10"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc",
+    "pack-check": "sh scripts/pack-check.sh"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-code": "*",
+    "@anolilab/multi-semantic-release": "*",
+    "@semantic-release/changelog": "*",
+    "@semantic-release/exec": "*",
+    "@semantic-release/git": "*",
+    "conventional-changelog-conventionalcommits": "*",
+    "semantic-release": "*"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-code": {
+      "optional": true
+    },
+    "@anolilab/multi-semantic-release": {
+      "optional": true
+    },
+    "@semantic-release/changelog": {
+      "optional": true
+    },
+    "@semantic-release/exec": {
+      "optional": true
+    },
+    "@semantic-release/git": {
+      "optional": true
+    },
+    "conventional-changelog-conventionalcommits": {
+      "optional": true
+    },
+    "semantic-release": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@semantic-release/changelog": "7.0.0",
+    "@semantic-release/git": "11.0.1",
+    "@semantic-release/npm": "13.2.0",
+    "@types/bun": "1.4.4",
+    "bun": "1.4.4",
+    "conventional-changelog-conventionalcommits": "9.3.1",
+    "semantic-release": "25.0.9",
+    "typescript": "5.9.3"
+  }
+}

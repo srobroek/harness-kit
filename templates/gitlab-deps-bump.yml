@@ -1,0 +1,41 @@
+# Copy into .gitlab-ci.yml (not include:remote). Opens an MR when a newer @srobroek/harness-kit is published.
+#
+# Setup:
+#   1. Project > Build > Pipeline schedules: add a schedule on the default branch with the variable DEPS_BUMP=1.
+#   2. GITLAB_TOKEN is the protected project access token the release job already uses (Maintainer, api + write_repository).
+#   3. Keep schedule pipelines away from every other job (see the README, "Schedule pipelines").
+
+deps-bump:
+  stage: release
+  image: node:24
+  variables:
+    GIT_DEPTH: 0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $DEPS_BUMP == "1" && $GITLAB_TOKEN
+  script:
+    - npm ci --no-audit --no-fund
+    # harness-kit runs under bun; `update` regenerates with the new release.
+    - npm install --global bun@1.4.4
+    - |
+      set -eu
+      latest=$(npm view @srobroek/harness-kit version)
+      branch="deps/harness-kit-$latest"
+      remote="https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+      if git ls-remote --exit-code --heads "$remote" "$branch" >/dev/null; then
+        echo "$branch already exists; nothing to do"
+        exit 0
+      fi
+      npx harness-kit update | tee /tmp/update.log
+      if [ "$(tail -n 1 /tmp/update.log)" = "up to date" ]; then exit 0; fi
+      title="chore(deps): bump @srobroek/harness-kit to $latest"
+      git checkout -b "$branch"
+      git add -A
+      git -c user.name="deps-bot" -c user.email="deps-bot@${CI_SERVER_HOST}" commit -m "$title"
+      git push "$remote" "$branch"
+      curl --fail --silent --show-error --request POST \
+        --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        --data-urlencode "source_branch=$branch" \
+        --data-urlencode "target_branch=${CI_DEFAULT_BRANCH}" \
+        --data-urlencode "title=$title" \
+        --data-urlencode "remove_source_branch=true" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests"

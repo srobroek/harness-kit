@@ -1,0 +1,41 @@
+# harness-kit's own release: semantic-release tags vX.Y.Z and publishes to npm through trusted publishing (OIDC).
+# No NPM_TOKEN. The trusted publisher on npmjs.com names this file: publish.yml.
+# It stays off until the repository variable RELEASE_ENABLED is "true", which happens after the first manual publish.
+name: publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency: publish
+
+jobs:
+  publish:
+    if: ${{ vars.RELEASE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install --global npm@^11.15.0
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run typecheck
+      - run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

@@ -1,0 +1,35 @@
+# Reusable: install, harness-kit check, bun test, tsc.
+#   jobs:
+#     check:
+#       uses: srobroek/harness-kit/.github/workflows/check.yml@v1.0.0   # same version as the package pin
+name: check
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "24"
+      bun-version:
+        type: string
+        default: "1.4.4"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+      - run: npm ci --no-audit --no-fund
+      - run: npx harness-kit check
+      - run: bun test
+      - run: npx tsc
