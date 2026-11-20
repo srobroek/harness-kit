@@ -1,11 +1,20 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "Move the @srobroek/harness-kit package and the harness-kit reusable workflows together, as one PR.",
+  "extends": [
+    "config:recommended"
+  ],
   "packageRules": [
     {
       "description": "The package pin and the workflow tags share one version; one group keeps them equal.",
-      "matchManagers": ["npm", "github-actions"],
-      "matchPackageNames": ["@srobroek/harness-kit", "srobroek/harness-kit"],
+      "matchManagers": [
+        "npm",
+        "github-actions"
+      ],
+      "matchPackageNames": [
+        "@srobroek/harness-kit",
+        "srobroek/harness-kit"
+      ],
       "groupName": "harness-kit",
       "groupSlug": "harness-kit",
       "rangeStrategy": "pin",

@@ -92,7 +92,7 @@ The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `
   export default releaseConfig({ forge: ["@semantic-release/gitlab", { gitlabUrl: "https://gitlab.example.com" }] })
   ```
 
-  Its `prepareCmd` runs `harness-kit stamp "$(basename "$PWD")" ${nextRelease.version} --git-add`. Install `semantic-release`, `@anolilab/multi-semantic-release`, `@semantic-release/changelog`, `@semantic-release/exec`, `@semantic-release/git` and `conventional-changelog-conventionalcommits` as dev dependencies. Keep `.multi-releaserc` (tag format) in your repo.
+  Its `prepareCmd` runs `harness-kit stamp "$(basename "$PWD")" ${nextRelease.version} --git-add`. Install `semantic-release`, `@anolilab/multi-semantic-release`, `@semantic-release/changelog`, `@semantic-release/exec`, `@semantic-release/git`, `conventional-changelog-conventionalcommits` and `@visulima/yaml` (which multi-semantic-release imports without declaring) as dev dependencies. Keep `.multi-releaserc` (tag format) in your repo.
 
 ## GitHub workflows
 
@@ -128,7 +128,7 @@ Extend the preset in `renovate.json`:
 { "extends": ["github>srobroek/harness-kit"] }
 ```
 
-It puts the npm package and the `srobroek/harness-kit` workflow refs in one `harness-kit` group, so they move in one PR, pinned to the tag. Renovate's hosted app does not run `postUpgradeTasks`, so the PR arrives without the regenerated files. In CI, `harness-kit check` fails on the PR; run `npx harness-kit build` on the PR branch and push the result. Repos without Actions run `harness-kit check` locally before merging.
+The preset extends `config:recommended`. It puts the npm package and the `srobroek/harness-kit` workflow refs in one `harness-kit` group, so they move in one PR, pinned to the tag. Renovate's hosted app does not run `postUpgradeTasks`, so the PR arrives without the regenerated files. In CI, `harness-kit check` fails on the PR; run `npx harness-kit build` on the PR branch and push the result. Repos without Actions run `harness-kit check` locally before merging.
 
 ### Without Renovate: `harness-kit update` in GitLab CI
 

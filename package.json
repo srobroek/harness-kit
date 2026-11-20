@@ -38,19 +38,20 @@
     "pack-check": "sh scripts/pack-check.sh"
   },
   "peerDependencies": {
-    "@anthropic-ai/claude-code": "*",
     "@anolilab/multi-semantic-release": "*",
+    "@anthropic-ai/claude-code": "*",
     "@semantic-release/changelog": "*",
     "@semantic-release/exec": "*",
     "@semantic-release/git": "*",
+    "@visulima/yaml": "*",
     "conventional-changelog-conventionalcommits": "*",
     "semantic-release": "*"
   },
   "peerDependenciesMeta": {
-    "@anthropic-ai/claude-code": {
+    "@anolilab/multi-semantic-release": {
       "optional": true
     },
-    "@anolilab/multi-semantic-release": {
+    "@anthropic-ai/claude-code": {
       "optional": true
     },
     "@semantic-release/changelog": {
@@ -60,6 +61,9 @@
       "optional": true
     },
     "@semantic-release/git": {
+      "optional": true
+    },
+    "@visulima/yaml": {
       "optional": true
     },
     "conventional-changelog-conventionalcommits": {
