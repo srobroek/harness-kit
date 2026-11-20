@@ -59,7 +59,7 @@ Each plugin's `package.json` carries `name` (equal to the directory), `version`,
 - `claude` (optional object) holds Claude-only settings:
   - `dependencies`: a non-empty list copied into the manifest's `dependencies`. Each item is a plugin name, `"name@marketplace"`, or `{ "name", "version", "marketplace" }` where `version` is a semver range such as `~2.1.0`. See [Claude's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies.md). Declaring a dependency on another marketplace also needs that marketplace in `allowCrossMarketplaceDependenciesOn` in your `marketplace.json`, which this tool does not write.
   - `homepage`, `repository`: `http(s)` URLs that replace the repo-level `claude.homepage` and `claude.repository` for this plugin.
-- A `package.json` `author` object may carry a `url`. It replaces the whole `claude.author` default; the two are not merged.
+- A `package.json` `author` object may carry a `url`. It is used only when `harness-kit.json` sets `claude.author.url`, so existing repos keep their output. It replaces the whole `claude.author` default; the two are not merged.
 - `options` (name to `{ description, default }`) become a Claude `userConfig` and an `options.json` in every harness tree.
 - `userConfig` is copied into the Claude manifest as is. Setting both `options` and `userConfig` is an error.
 - `common/<dir>/x.<harness>.md` replaces `x.md` in that harness only.
@@ -144,20 +144,22 @@ The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `
   export default releaseConfig({ forge: ["@semantic-release/gitlab", { gitlabUrl: "https://gitlab.example.com" }] })
   ```
 
-  Pass `releaseRules` to change which commits cut a release. The list goes to `@semantic-release/commit-analyzer` next to the `conventionalcommits` preset. Without it the output is unchanged. A commit that matches no rule gets the preset's defaults, and a commit that matches several gets the highest release.
+  Pass `releaseRules` to change which commits cut a release. The list goes to `@semantic-release/commit-analyzer` next to the `conventionalcommits` preset. Without it the output is unchanged. A commit that matches several rules gets the highest release, whatever the order. A commit that matches no rule gets the preset's defaults.
+
+  Once a rule matches a commit, the defaults no longer apply to it. A `refactor!:` commit then cuts only a patch, unless a rule such as `{ breaking: true, release: "major" }` also matches it. Keep that guard in the list.
 
   ```js
   // release patches for refactor: and docs: commits
   export default releaseConfig({
     releaseRules: [
-      { breaking: true, release: "major" }, // keep this first, or "refactor!:" would only cut a patch
+      { breaking: true, release: "major" }, // without it, "refactor!:" matches only the patch rule
       { type: "refactor", release: "patch" },
       { type: "docs", release: "patch" },
     ],
   })
   ```
 
-  multi-semantic-release merges a package's own semantic-release config over the shared one with `Object.assign`. A package's `plugins` therefore replaces the whole list, and a `release` key in its `package.json` cannot override only the rules. To give one package other rules, such as a package below 1.0 that treats a breaking change as a minor release, put a `release.config.mjs` in that package's directory that calls `releaseConfig` again with its own rules and the same `forge`:
+  multi-semantic-release merges a package's own semantic-release config over the shared one with `Object.assign`, so a package's `plugins` replaces the whole list. A dry run with `@anolilab/multi-semantic-release` 4.6.3 confirmed that a `release.config.mjs` in a package directory is loaded and its `releaseRules` apply to that package only. To give one package other rules, such as a package below 1.0 that treats a breaking change as a minor release, put a `release.config.mjs` in that package's directory that calls `releaseConfig` again with its own rules and the same `forge`:
 
   ```js
   // plugins/cad/release.config.mjs

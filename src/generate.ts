@@ -135,7 +135,8 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     const authorName = typeof raw === "string" ? raw : isRecord(raw) ? raw.name : undefined
     if (typeof authorName !== "string" || !authorName.trim()) fail(where, '"author" must be a string or an object with a name')
     author = { name: authorName }
-    if (isRecord(raw) && raw.url !== undefined) author.url = httpUrl(where, "author.url", raw.url)
+    // Existing repos may carry a url in package.json that was never emitted; it is read only once harness-kit.json sets claude.author.url.
+    if (config.claude.author?.url !== undefined && isRecord(raw) && raw.url !== undefined) author.url = httpUrl(where, "author.url", raw.url)
   }
   const claude = readClaudeSettings(where, key, own.claude)
   const license = manifest.license === undefined ? undefined : nonEmptyString(where, "license", manifest.license)

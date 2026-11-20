@@ -6,7 +6,8 @@
 //
 // The forge plugin (GitLab, GitHub) belongs to the consumer, so it is a required argument of the function form.
 // releaseRules (commit-analyzer rules) change which commit types cut a release:
-//   releaseConfig({ releaseRules: [{ type: "refactor", release: "patch" }, { type: "docs", release: "patch" }] })
+//   releaseConfig({ releaseRules: [{ breaking: true, release: "major" }, { type: "refactor", release: "patch" }, { type: "docs", release: "patch" }] })
+// Keep the breaking rule: a commit that matches any rule skips the defaults, so "refactor!:" would otherwise cut only a patch.
 // multi-semantic-release merges a package's own release config over this one with Object.assign, so a package that needs other rules
 // carries its own release.config.mjs that calls releaseConfig again; the whole config is replaced, not just the rules.
 // The consumer installs semantic-release and the plugins used here as devDependencies.

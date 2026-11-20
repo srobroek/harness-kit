@@ -54,6 +54,7 @@ describe("resolveConfig errors", () => {
     ["a non-boolean claude.strict", with_({ claude: { strict: "yes" } }), /"claude.strict"/],
     ["an unknown claude key", with_({ claude: { lenient: true } }), /"claude.lenient"/],
     ["a claude.author without a name", with_({ claude: { author: {} } }), /"claude.author.name"/],
+    ["an unknown claude.author key", with_({ claude: { author: { name: "o", email: "x" } } }), /"claude.author.email"/],
     ["a claude.homepage that is not a URL", with_({ claude: { homepage: "example" } }), /"claude.homepage"/],
     ["a claude.repository with a non-http scheme", with_({ claude: { repository: "ftp://example.com/r" } }), /"claude.repository"/],
     ["a claude.author.url that is not a URL", with_({ claude: { author: { name: "o", url: "x" } } }), /"claude.author.url"/],

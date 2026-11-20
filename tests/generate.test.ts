@@ -665,11 +665,23 @@ describe("Claude manifest links and dependencies", () => {
     expect(entry()).toMatchObject({ homepage: "https://demo.example.com", repository: "https://github.com/o/demo" })
   })
 
-  test("the package.json author url wins over the config author, which is not merged in", () => {
+  test("a package.json author url is ignored while harness-kit.json sets no claude.author.url", () => {
+    edit((m) => (m.author = { name: "Plugin Author", url: "not a url" }))
+    generate()
+    expect(pluginJson().author).toEqual({ name: "Plugin Author" })
+  })
+
+  test("once claude.author.url is set, the package.json author url wins over it and the config author is not merged in", () => {
     config.claude = { strict: true, author: { name: "Fixture Owner", url: "https://example.com/owner" } }
     edit((m) => (m.author = { name: "Plugin Author", url: "https://example.com/plugin-author" }))
     generate()
     expect(pluginJson().author).toEqual({ name: "Plugin Author", url: "https://example.com/plugin-author" })
+  })
+
+  test("inventory.json excludes populated claude settings", () => {
+    edit((m) => (m["agent-plugins"].claude = { dependencies: ["a"], homepage: "https://example.com", repository: "https://github.com/o/r" }))
+    generate()
+    expect(readJson("inventory.json").plugins[0]).not.toHaveProperty("claude")
   })
 
   test("claude.dependencies are copied into plugin.json as strings and objects, in order", () => {
@@ -699,7 +711,8 @@ describe("Claude manifest links and dependencies", () => {
     expect(() => readPlugins(root, config)).toThrow(message)
   })
 
-  test("rejects a package.json author url that is not a URL", () => {
+  test("rejects a package.json author url that is not a URL once claude.author.url is set", () => {
+    config.claude = { strict: true, author: { name: "o", url: "https://example.com/o" } }
     edit((m) => (m.author = { name: "A", url: "nope" }))
     expect(() => readPlugins(root, config)).toThrow(/author\.url/)
   })
