@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/srobroek/harness-kit/compare/v1.1.0...v1.2.0) (2026-11-20)
+
+### Features
+
+* repo-level shared items and agent registration that skips duplicates ([c2fb2ed](https://github.com/srobroek/harness-kit/commit/c2fb2ed7a1fba33b30b373e3e3d967268bb27dc7))
+
 ## [1.1.0](https://github.com/srobroek/harness-kit/compare/v1.0.1...v1.1.0) (2026-11-20)
 
 ### Features
