@@ -1,3 +1,9 @@
+## [1.3.2](https://github.com/srobroek/harness-kit/compare/v1.3.1...v1.3.2) (2026-11-20)
+
+### Bug Fixes
+
+* omit the "." export from a TUI-only OpenCode package ([682456a](https://github.com/srobroek/harness-kit/commit/682456ac504a51e9f550581813c941c6524e3a1e))
+
 ## [1.3.1](https://github.com/srobroek/harness-kit/compare/v1.3.0...v1.3.1) (2026-11-20)
 
 ### Bug Fixes
