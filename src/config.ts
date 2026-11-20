@@ -20,6 +20,8 @@ export type Config = {
   /** Directories under plugins/<name>/common/ that are copied into each harness tree. */
   commonDirs: string[]
   kinds: Kind[]
+  /** Repo-level directory whose items plugins list in `shared`; its layout follows `commonDirs` (shared/agents/x.md). */
+  sharedDir: string
   /** Key in plugins/<name>/package.json that holds the plugin's own settings. */
   pluginKey: string
   /** npm scope of the generated OMP package name. */
@@ -37,7 +39,7 @@ export type Config = {
   omp: { packageType?: "module" | "commonjs" }
 }
 
-const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "pluginKey", "ompScope", "generatedBy", "claude", "omp"]
+const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "sharedDir", "pluginKey", "ompScope", "generatedBy", "claude", "omp"]
 const DIR_NAME = /^[a-z0-9][a-z0-9._-]*$/
 const PACKAGE_SCOPE = /^@[a-z0-9][a-z0-9._-]*$/
 
@@ -86,6 +88,10 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
 
   const kinds = raw.kinds === undefined ? DEFAULT_KINDS : pickList(where, "kinds", "kind", raw.kinds, KNOWN_KINDS)
 
+  const sharedDir = raw.sharedDir === undefined ? "shared" : nonEmptyString(where, "sharedDir", raw.sharedDir)
+  if (!DIR_NAME.test(sharedDir)) fail(where, `"sharedDir" must be a plain directory name, got "${sharedDir}"`)
+  if (["plugins", "_kit", "node_modules"].includes(sharedDir) || commonDirs.includes(sharedDir)) fail(where, `"sharedDir" cannot be "${sharedDir}"`)
+
   const pluginKey = raw.pluginKey === undefined ? "agent-plugins" : nonEmptyString(where, "pluginKey", raw.pluginKey)
   const ompScope = raw.ompScope === undefined ? "@agent-plugins" : nonEmptyString(where, "ompScope", raw.ompScope)
   if (!PACKAGE_SCOPE.test(ompScope)) fail(where, `"ompScope" must look like "@scope", got "${ompScope}"`)
@@ -121,6 +127,7 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
     harnesses,
     commonDirs,
     kinds,
+    sharedDir,
     pluginKey,
     ompScope,
     generatedBy,

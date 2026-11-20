@@ -7,6 +7,7 @@ harness-kit is the shared build toolkit for multi-harness agent plugin repos. It
 - `src/config.ts`: harness-kit.json schema, defaults, validation.
 - `src/generate.ts`: reads `plugins/<name>/`, renders every generated file, detects drift.
 - `src/cli.ts`: the `harness-kit` command. `src/update.ts`, `src/validate-claude.ts`, `src/workflow-refs.ts` back its commands.
+- Shared items: `resolveShared` in `src/generate.ts` resolves a plugin's `shared` list against `<sharedDir>/`; the copies are ordinary common files, so drift and stale removal reuse the `commonDirs` handling.
 - `src/runtime.ts`, `runtime/<harness>/`: the modules plugins vendor into `<harness>/_kit/`. `src/testing.ts`: the `@srobroek/harness-kit/testing` helpers.
 - `release.config.js`, `tsconfig.base.json`: presets that consumers extend. `default.json`: the Renovate preset.
 - `.github/workflows/`: `ci.yml` and `publish.yml` are this repo's own; `check.yml` and `release.yml` are reusable workflows for consumers.

@@ -44,6 +44,7 @@ describe("opting in", () => {
     const expected: Array<[string, string, string]> = [
       ["opencode/_kit/frontmatter.ts", "opencode", "frontmatter.ts"],
       ["opencode/_kit/content.ts", "opencode", "content.ts"],
+      ["opencode/_kit/agents.ts", "opencode", "agents.ts"],
       ["opencode/_kit/session.ts", "opencode", "session.ts"],
       ["claude/_kit/render.mjs", "claude", "render.mjs"],
       ["omp/_kit/template-extension.ts", "omp", "template-extension.ts"],
@@ -84,7 +85,7 @@ describe("opting in", () => {
     optIn()
     generate()
     const entry = JSON.parse(readFileSync(path.join(root, "inventory.json"), "utf8")).plugins[0]
-    expect(entry.runtime).toEqual(["frontmatter", "content", "session", "render", "template-extension"])
+    expect(entry.runtime).toEqual(["frontmatter", "content", "agents", "session", "render", "template-extension"])
     expect(entry.harnesses.opencode.extensions).toEqual(["index", "tui"])
     expect(entry.harnesses.omp.extensions).toEqual(["demo-ext"])
   })
@@ -199,5 +200,79 @@ describe("the vendored copies work on their own", () => {
     expect(run({})).toBe("# Demo template\n\nSay hello.\n")
     expect(run({ CLAUDE_PLUGIN_OPTION_GREETING: "hi" })).toBe("# Demo template\n\nSay hi.\n")
     expect(run({ CLAUDE_PLUGIN_OPTION_GREETING: "" })).toBe("# Demo template\n\nSay hello.\n")
+  })
+})
+
+describe("agent registration (vendored agents.ts)", () => {
+  const load = async () => {
+    optIn(["agents"])
+    generate()
+    expect(existsSync(demo("opencode/_kit/frontmatter.ts"))).toBe(true)
+    return (await import(path.join(demo("opencode"), "_kit", "agents.ts"))) as typeof import("../runtime/opencode/agents.ts")
+  }
+  const writeAgent = (name: string, text: string) => {
+    mkdirSync(demo("opencode/agents"), { recursive: true })
+    writeFileSync(demo(`opencode/agents/${name}.md`), text)
+  }
+
+  test("loadAgentFiles reads agents/*.md in name order with front matter fields and the prompt", async () => {
+    const { loadAgentFiles } = await load()
+    writeAgent("b", "---\ndescription: Second.\nmode: subagent\n---\n\nPrompt B\n")
+    writeAgent("a", "No front matter\n")
+    const files = loadAgentFiles(demo("opencode"))
+    expect(files.map((file) => file.id)).toEqual(["a", "b"])
+    expect(files[1]?.field("description")).toBe("Second.")
+    expect(files[1]?.system).toBe("Prompt B")
+    expect(files[0]?.system).toBe("No front matter")
+  })
+
+  test("a new agent is registered with its description, mode and prompt", async () => {
+    const { loadAgentFiles, registerAgents } = await load()
+    writeAgent("a", "---\ndescription: First.\nmode: subagent\n---\nPrompt A\n")
+    const host = createFakeContext()
+    const registration = await registerAgents(host.ctx.agent, loadAgentFiles(demo("opencode")), { debug: () => {} })
+    expect(host.agents.get("a")).toEqual({ description: "First.", mode: "subagent", system: "Prompt A" })
+    expect(registration.skipped).toEqual([])
+    await registration.dispose()
+    expect(host.disposed()).toBe(1)
+  })
+
+  test("an agent that another plugin already registered is skipped with one debug line, so the first plugin wins", async () => {
+    const { loadAgentFiles, registerAgents } = await load()
+    writeAgent("a", "---\ndescription: Version 2.\n---\nPrompt v2\n")
+    const host = createFakeContext()
+    host.agents.set("a", { description: "Version 1.", system: "Prompt v1" })
+    const lines: string[] = []
+    const registration = await registerAgents(host.ctx.agent, loadAgentFiles(demo("opencode")), { debug: (line) => void lines.push(line) })
+    expect(host.agents.get("a")).toEqual({ description: "Version 1.", system: "Prompt v1" })
+    expect(registration.skipped).toEqual(["a"])
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('agent "a" is already registered by another plugin')
+  })
+
+  test("two plugins on one host: the second skips only the agents the first registered", async () => {
+    const { loadAgentFiles, registerAgents } = await load()
+    writeAgent("shared", "---\ndescription: Shared.\n---\nOne\n")
+    const host = createFakeContext()
+    await registerAgents(host.ctx.agent, loadAgentFiles(demo("opencode")), { debug: () => {} })
+    writeAgent("shared", "---\ndescription: Shared.\n---\nTwo\n")
+    writeAgent("extra", "---\ndescription: Extra.\n---\nExtra prompt\n")
+    const second = await registerAgents(host.ctx.agent, loadAgentFiles(demo("opencode")), { debug: () => {} })
+    expect(second.skipped).toEqual(["shared"])
+    expect(host.agents.get("shared")?.system).toBe("One")
+    expect(host.agents.get("extra")?.system).toBe("Extra prompt")
+  })
+
+  test("a custom apply shapes the draft of a new agent only", async () => {
+    const { loadAgentFiles, registerAgents } = await load()
+    writeAgent("a", "Prompt\n")
+    writeAgent("b", "Prompt\n")
+    const host = createFakeContext({ existingAgents: ["b"] })
+    await registerAgents(host.ctx.agent, loadAgentFiles(demo("opencode")), {
+      debug: () => {},
+      apply: (draft, file) => void (draft.shaped = file.id),
+    })
+    expect(host.agents.get("a")).toEqual({ shaped: "a" })
+    expect(host.agents.get("b")).toEqual({ system: "own" })
   })
 })

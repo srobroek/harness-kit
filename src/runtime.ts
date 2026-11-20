@@ -18,6 +18,7 @@ export const RUNTIME_DIR = "_kit"
 export const RUNTIME_MODULES = {
   frontmatter: { harness: "opencode", file: "frontmatter.ts", requires: [] },
   content: { harness: "opencode", file: "content.ts", requires: ["frontmatter"] },
+  agents: { harness: "opencode", file: "agents.ts", requires: ["frontmatter"] },
   session: { harness: "opencode", file: "session.ts", requires: [] },
   render: { harness: "claude", file: "render.mjs", requires: [] },
   "template-extension": { harness: "omp", file: "template-extension.ts", requires: [] },

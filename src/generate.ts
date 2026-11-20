@@ -32,6 +32,8 @@ export type Plugin = {
   license?: string
   /** The Claude `userConfig` schema, copied into plugin.json as is. Exclusive with `options`. */
   userConfig?: Record<string, unknown>
+  /** Items of the repo's shared directory this plugin takes, like `agents/x` or `skills/y`. Copied into every harness tree. */
+  shared?: string[]
   /** Runtime modules vendored into the harness trees as `_kit/`, with their dependencies. Absent when the plugin opts out. */
   runtime?: RuntimeModuleName[]
 }
@@ -41,6 +43,7 @@ export type Drift = { changed: string[]; extra: string[] }
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+const SHARED_ITEM = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/
 const OPTION_NAME = /^[a-z][a-z0-9_]*$/
 const OPENCODE_SDK_RANGE = ">=2.1.4 <3"
 const MODULE_EXTENSION = /\.(?:[cm]?[jt]s)$/
@@ -129,6 +132,7 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
   if (options && userConfig) fail(where, `set either "${key}.options" or "${key}.userConfig", not both: options generate the userConfig`)
   const selectedHarnesses = KNOWN_HARNESSES.filter((h) => harnesses.includes(h))
   const runtime = readRuntime(where, key, own.runtime, selectedHarnesses)
+  const shared = readShared(where, key, own.shared, config)
   // Keep canonical harness order so output does not depend on how the author ordered the list.
   return {
     name,
@@ -143,8 +147,23 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     author,
     license,
     userConfig,
+    shared,
     runtime,
   }
+}
+
+function readShared(where: string, key: string, raw: unknown, config: Config): string[] | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.length === 0) fail(where, `"${key}.shared" must be a non-empty list of items like "agents/name"`)
+  for (const item of raw) {
+    if (typeof item !== "string" || !SHARED_ITEM.test(item) || item.split("/").includes("..")) {
+      fail(where, `"${key}.shared" item ${JSON.stringify(item)} must be a relative path like "agents/name"`)
+    }
+    const dir = item.split("/")[0]!
+    if (!config.commonDirs.includes(dir)) fail(where, `shared item "${item}" is in "${dir}", which is not in commonDirs (${config.commonDirs.join(", ")})`)
+  }
+  if (new Set(raw).size !== raw.length) fail(where, `"${key}.shared" lists an item twice`)
+  return raw as string[]
 }
 
 function readRuntime(where: string, key: string, raw: unknown, harnesses: Harness[]): RuntimeModuleName[] | undefined {
@@ -203,7 +222,10 @@ function checkOpencodeEntries(root: string, plugin: Plugin): void {
 
 export function readPlugins(root: string, config: Config): Plugin[] {
   const plugins = listDirs(path.join(root, "plugins")).map((name) => readPlugin(root, name, config))
-  for (const plugin of plugins) checkOpencodeEntries(root, plugin)
+  for (const plugin of plugins) {
+    checkOpencodeEntries(root, plugin)
+    resolveShared(root, plugin, config)
+  }
   return plugins
 }
 
@@ -236,15 +258,66 @@ function commonFilesFor(files: string[], harness: Harness): Array<[string, strin
   return picked
 }
 
+/** The plain (variant-free) name of a file: `x.claude.md` and `x.md` both give `x.md`. */
+function plainName(file: string): string {
+  const match = VARIANT.exec(path.basename(file))
+  return match ? path.join(path.dirname(file), `${match[1]}${match[3]}`) : file
+}
+
+/** Whether a file of the shared directory belongs to the item `rest` (the part after the kind directory). */
+function belongsToItem(file: string, rest: string): boolean {
+  if (file === rest || file.startsWith(`${rest}/`)) return true
+  if (stripExtension(file) === rest) return true
+  return stripExtension(plainName(file)) === rest
+}
+
+/** Shared files a plugin takes, by kind directory: paths relative to <sharedDir>/<dir>. Throws on a missing item or a clash. */
+function resolveShared(root: string, plugin: Plugin, config: Config): Map<string, string[]> {
+  const taken = new Map<string, string[]>()
+  const common = path.join(pluginDir(root, plugin), "common")
+  for (const item of plugin.shared ?? []) {
+    const [dir, ...parts] = item.split("/") as [string, ...string[]]
+    const rest = parts.join("/")
+    const base = path.join(root, config.sharedDir, dir)
+    const files = listFiles(base).filter((file) => belongsToItem(file, rest))
+    if (files.length === 0) fail(`plugins/${plugin.name}/package.json`, `shared item "${item}" not found in ${config.sharedDir}/${dir}/`)
+    const own = new Set(listFiles(path.join(common, dir)).map(plainName))
+    for (const file of files) {
+      if (own.has(plainName(file))) {
+        fail(`plugins/${plugin.name}`, `shared item "${item}" clashes with its own common/${dir}/${plainName(file)}; remove one of them`)
+      }
+    }
+    taken.set(dir, [...(taken.get(dir) ?? []), ...files])
+  }
+  return taken
+}
+
+/** Header for a copy of a shared Markdown file, placed after any front matter so the front matter still parses. */
+function withSharedHeader(text: string, note: string): string {
+  const front = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text)
+  if (!front) return `${note}\n\n${text}`
+  const head = front[0].endsWith("\n") ? front[0] : `${front[0]}\n`
+  return `${head}${note}\n${text.slice(front[0].length)}`
+}
+
 function ownedCopies(root: string, plugin: Plugin, config: Config): Output[] {
   const common = path.join(pluginDir(root, plugin), "common")
+  const shared = resolveShared(root, plugin, config)
   const outputs: Output[] = []
   for (const harness of plugin.harnesses) {
     for (const dir of config.commonDirs) {
-      for (const [source, dest] of commonFilesFor(listFiles(path.join(common, dir)), harness)) {
-        let contents: string | Buffer = readFileSync(path.join(common, dir, source))
+      const own = listFiles(path.join(common, dir))
+      const taken = shared.get(dir) ?? []
+      for (const [source, dest] of commonFilesFor([...own, ...taken].sort(), harness)) {
+        const isShared = taken.includes(source)
+        const origin = isShared ? path.join(root, config.sharedDir, dir, source) : path.join(common, dir, source)
+        let contents: string | Buffer = readFileSync(origin)
         if (harness === "omp" && dir === "rules" && !contents.subarray(0, 3).equals(Buffer.from("---"))) {
           contents = OMP_ALWAYS_APPLY + contents.toString("utf8")
+        }
+        if (isShared && source.endsWith(".md")) {
+          const note = `<!-- Generated by ${config.generatedBy} from ${config.sharedDir}/${dir}/${source}. Do not edit. -->`
+          contents = withSharedHeader(contents.toString("utf8"), note)
         }
         outputs.push({ file: path.join(harnessDir(root, plugin, harness), dir, dest), contents })
       }

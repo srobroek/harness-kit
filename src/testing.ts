@@ -5,19 +5,36 @@ export type RegisteredSkill = { id: string; description: string; content: string
 
 /**
  * A fake OpenCode host context that records what a plugin registers: the `system` parts pushed through
- * `ctx.session.hook("context")`, the skills added through `ctx.skill.transform`, and how many registrations were disposed.
+ * `ctx.session.hook("context")`, the skills added through `ctx.skill.transform`, the agents registered through
+ * `ctx.agent.transform` (a draft per id, filled by `editor.update`), and how many registrations were disposed.
  */
-export function createFakeContext(config: { options?: unknown; existingSkills?: string[] } = {}) {
+export function createFakeContext(config: { options?: unknown; existingSkills?: string[]; existingAgents?: string[] } = {}) {
   const system: SystemPart[] = []
   const skills = new Map<string, RegisteredSkill>(
     (config.existingSkills ?? []).map((id) => [id, { id, description: "own", content: "own" }]),
   )
+  const agents = new Map<string, Record<string, unknown>>((config.existingAgents ?? []).map((id) => [id, { system: "own" }]))
   let disposed = 0
   const ctx = {
     options: config.options,
     session: {
       hook: async (_name: string, handler: (event: { system: SystemPart[] }) => void) => {
         handler({ system })
+        return { dispose: async () => void disposed++ }
+      },
+    },
+    agent: {
+      transform: async (
+        change: (editor: { get(id: string): unknown; update(id: string, change: (draft: Record<string, unknown>) => void): void }) => void,
+      ) => {
+        change({
+          get: (id) => agents.get(id),
+          update: (id, edit) => {
+            const draft = agents.get(id) ?? {}
+            edit(draft)
+            agents.set(id, draft)
+          },
+        })
         return { dispose: async () => void disposed++ }
       },
     },
@@ -28,5 +45,5 @@ export function createFakeContext(config: { options?: unknown; existingSkills?: 
       },
     },
   }
-  return { ctx, system, skills, disposed: () => disposed }
+  return { ctx, system, skills, agents, disposed: () => disposed }
 }
