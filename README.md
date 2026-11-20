@@ -76,6 +76,18 @@ An item names a file without its extension (`agents/x`) or a directory (`skills/
 #### Two installed plugins with the same agent
 
 - **OpenCode:** registering the same agent name twice normally lets the last plugin loaded win. The vendored `agents` module avoids that: `registerAgents(ctx.agent, loadAgentFiles(root))` skips an agent another plugin already registered and logs one debug line (`console.debug`, or the `debug` option). The first plugin loaded wins, so a version skew between the two copies is the same on every start.
+- **OpenCode, owner-wins:** when one plugin owns the agent and another ships a fallback copy, the owner's copy should win in either load order. `registerAgents` takes these options:
+
+  | Option | Side | Meaning |
+  | --- | --- | --- |
+  | `owners` | fallback | Agent id to the owner plugin's name, such as `{ researcher: "agent-researcher" }`. Ids not listed behave as in the default mode. |
+  | `plugin` | fallback | The host's `ctx.plugin`. The fallback skips its copy when `plugin.list` reports the owner, or when the id already exists. Without `plugin`, or when `list` fails or takes longer than `listTimeoutMs` (default 2000), the owner counts as not installed. |
+  | `pluginMatch` | fallback | How an owner name matches a `plugin.list` entry: `idPrefix` (the entry's `id` equals `idPrefix + name`) and `packagePrefixes` (a package target or local path has `name` or `prefix + name` as a whole segment, ended by the end of the string or one of `@ / # : .`, so `name-extra` does not match). Both default to no prefix. |
+  | `role: "owner"` | owner | Replaces an existing copy whose prompt equals its own: permissions and model are dropped, and so is the `fallbackHeader` request header if set. Any other existing agent is layered over: `apply` gets `created = false`, and the default `apply` fills only missing fields. |
+  | `fallbackHeader` | owner | Name of the request header that marks a model fallback, such as `x-opencode-model-fallback` in opencode-plugins. Default: none. |
+
+  `apply(draft, file, created)` also shapes agents from outside, for example opencode-plugins' `shapeAgent`. `debug` is a function or a host logger with a `debug` method. The result carries `skipped` and, for an owner, `replaced`.
+
 - **Claude Code:** it prefixes each plugin's agents with the plugin name (`plugin-a:challenger`, `plugin-b:challenger`). Both stay available, and harness-kit cannot change that. A version skew shows up as two agents with different text.
 
 ### Vendored runtime modules
@@ -86,7 +98,7 @@ Several plugins carry the same runtime code. harness-kit ships it as small modul
 | --- | --- | --- |
 | `frontmatter` | opencode | `isRecord`, `parseFrontmatter` |
 | `content` | opencode | `loadSkills`, `loadRules`, `loadPrompt`, `resolveOptions`, `renderTemplate`, `setupContent`: registers `skills/`, `rules/` and `templates/` with the host. Needs `frontmatter`. |
-| `agents` | opencode | `loadAgentFiles`, `registerAgents`: registers `agents/*.md`, skipping an agent another plugin already registered. Needs `frontmatter`. |
+| `agents` | opencode | `loadAgentFiles`, `registerAgents`, `listsPlugin`, `listPlugins`: registers `agents/*.md`, skipping an agent another plugin already registered, or in owner-wins mode keeping the owner's copy. Needs `frontmatter`. |
 | `session` | opencode | `createRootResolver`, `rootOf`: resolve a session to its root session |
 | `render` | claude | `render.mjs`, a SessionStart hook: `node "${CLAUDE_PLUGIN_ROOT}/_kit/render.mjs" <template>` prints `templates/<template>.md` with the options filled in |
 | `template-extension` | omp | `templateExtension(name)`: an extension that appends the rendered `templates/<name>.md` to the system prompt, with options from `<name>.json` in the OMP agent directory |
