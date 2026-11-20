@@ -1,15 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Move the @srobroek/harness-kit package and the harness-kit reusable workflows together, as one PR.",
+  "description": "Move the @srobroek/harness-kit package, the harness-kit reusable workflow refs and the versions quoted in Markdown together, as one PR.",
   "extends": [
     "config:recommended"
   ],
   "packageRules": [
     {
-      "description": "The package pin and the workflow tags share one version; one group keeps them equal.",
+      "description": "The package pin, the workflow tags and the versions in Markdown share one version; one group keeps them equal.",
       "matchManagers": [
         "npm",
-        "github-actions"
+        "github-actions",
+        "custom.regex"
       ],
       "matchPackageNames": [
         "@srobroek/harness-kit",
@@ -21,6 +22,33 @@
       "pinDigests": false,
       "semanticCommitType": "chore",
       "semanticCommitScope": "deps"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Workflow refs quoted in Markdown: srobroek/harness-kit/.github/workflows/<file>.yml@vX.Y.Z. The tag keeps its v, as in the git tag.",
+      "managerFilePatterns": [
+        "**/*.md"
+      ],
+      "matchStrings": [
+        "(?<depName>srobroek/harness-kit)/\\.github/workflows/[\\w.-]+\\.ya?ml@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Package versions quoted in Markdown: @srobroek/harness-kit@X.Y.Z and \"@srobroek/harness-kit\": \"X.Y.Z\".",
+      "managerFilePatterns": [
+        "**/*.md"
+      ],
+      "matchStrings": [
+        "(?<depName>@srobroek/harness-kit)@(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "\"(?<depName>@srobroek/harness-kit)\"\\s*:\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "semver"
     }
   ]
 }

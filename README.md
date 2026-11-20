@@ -13,7 +13,7 @@ npm install --save-dev --save-exact @srobroek/harness-kit
 ```
 
 ```json
-{ "devDependencies": { "@srobroek/harness-kit": "1.0.0" } }
+{ "devDependencies": { "@srobroek/harness-kit": "X.Y.Z" } }
 ```
 
 bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `npm ci` and `bun install` both install it.
@@ -181,11 +181,11 @@ The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `
 ```yaml
 jobs:
   check:
-    uses: srobroek/harness-kit/.github/workflows/check.yml@v1.0.0
+    uses: srobroek/harness-kit/.github/workflows/check.yml@vX.Y.Z
   release:
     needs: check
     if: github.ref == 'refs/heads/main'
-    uses: srobroek/harness-kit/.github/workflows/release.yml@v1.0.0
+    uses: srobroek/harness-kit/.github/workflows/release.yml@vX.Y.Z
     permissions: { contents: write, issues: write, pull-requests: write }
 ```
 
@@ -210,7 +210,7 @@ Extend the preset in `renovate.json`:
 { "extends": ["github>srobroek/harness-kit"] }
 ```
 
-The preset extends `config:recommended`. It puts the npm package and the `srobroek/harness-kit` workflow refs in one `harness-kit` group, so they move in one PR, pinned to the tag. Renovate's hosted app does not run `postUpgradeTasks`, so the PR arrives without the regenerated files. In CI, `harness-kit check` fails on the PR; run `npx harness-kit build` on the PR branch and push the result. Repos without Actions run `harness-kit check` locally before merging.
+The preset extends `config:recommended`. It puts the npm package, the `srobroek/harness-kit` workflow refs and the versions quoted in Markdown (`@srobroek/harness-kit@X.Y.Z`, `"@srobroek/harness-kit": "X.Y.Z"`, `…/workflows/check.yml@vX.Y.Z`) in one `harness-kit` group, so they move in one PR, pinned to the tag. Write a placeholder such as `X.Y.Z` where the exact version is not the point: the Markdown managers only match a full version. The preset is read from this repository's default branch, so a change to it reaches consumers without an npm release. Renovate's hosted app does not run `postUpgradeTasks`, so the PR arrives without the regenerated files. In CI, `harness-kit check` fails on the PR; run `npx harness-kit build` on the PR branch and push the result. Repos without Actions run `harness-kit check` locally before merging.
 
 ### Without Renovate: `harness-kit update` in GitLab CI
 
