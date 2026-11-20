@@ -76,6 +76,12 @@ describe("harness manifests", () => {
       peerDependenciesMeta: { "@opencode/plugin": { optional: true } },
     })
   })
+
+  test("opencode package.json of a TUI-only plugin exports only ./tui", () => {
+    rmSync(path.join(root, demo("opencode/index.js")))
+    generate()
+    expect(readJson(demo("opencode/package.json")).exports).toEqual({ "./tui": "./tui.js" })
+  })
 })
 
 describe("common content", () => {
