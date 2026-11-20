@@ -256,13 +256,22 @@ describe("inventory", () => {
   })
 })
 
-describe("executable bit", () => {
-  const source = () => path.join(root, demo("common/skills/demo-skill/run.py"))
-  const copies = () => ["opencode", "claude", "omp"].map((h) => path.join(root, demo(`${h}/skills/demo-skill/run.py`)))
+describe.each([
+  { kind: "common", from: "plugins/demo/common/skills/demo-skill/run.py" },
+  { kind: "shared", from: "shared/skills/tool-skill/run.py", dest: "skills/tool-skill/run.py" },
+])("executable bit ($kind source)", ({ from, dest = "skills/demo-skill/run.py" }) => {
+  const source = () => path.join(root, from)
+  const copies = () => ["opencode", "claude", "omp"].map((h) => path.join(root, demo(`${h}/${dest}`)))
   const isExec = (file: string) => (statSync(file).mode & 0o111) !== 0
   beforeEach(() => {
+    mkdirSync(path.dirname(source()), { recursive: true })
     writeFileSync(source(), "#!/usr/bin/env python3\n")
     chmodSync(source(), 0o755)
+    if (from.startsWith("shared/")) {
+      const manifest = JSON.parse(read("plugins/demo/package.json"))
+      manifest["agent-plugins"].shared = ["skills/tool-skill"]
+      writeFileSync(path.join(root, "plugins/demo/package.json"), JSON.stringify(manifest))
+    }
   })
 
   test("copies of an executable source are executable", () => {
@@ -279,9 +288,18 @@ describe("executable bit", () => {
   test("a copy that lost the bit is stale, and write restores it", () => {
     generate()
     chmodSync(copies()[0]!, 0o644)
-    expect(staleFiles()).toEqual([demo("opencode/skills/demo-skill/run.py")])
+    expect(staleFiles()).toEqual([demo(`opencode/${dest}`)])
     generate()
     expect(isExec(copies()[0]!)).toBe(true)
+    expect(staleFiles()).toEqual([])
+  })
+
+  test("a copy that lost only the owner bit is stale, and write restores it", () => {
+    generate()
+    chmodSync(copies()[0]!, 0o655)
+    expect(staleFiles()).toEqual([demo(`opencode/${dest}`)])
+    generate()
+    expect(statSync(copies()[0]!).mode & 0o100).toBe(0o100)
     expect(staleFiles()).toEqual([])
   })
 

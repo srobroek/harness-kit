@@ -47,6 +47,8 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 const SHARED_ITEM = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/
 const OPTION_NAME = /^[a-z][a-z0-9_]*$/
 const OPENCODE_SDK_RANGE = ">=2.1.4 <3"
+/** The owner-execute bit decides whether a file counts as executable; chmod keeps group and other in step with their read bits. */
+const OWNER_EXEC = 0o100
 const EXEC_BITS = 0o111
 const MODULE_EXTENSION = /\.(?:[cm]?[jt]s)$/
 
@@ -324,7 +326,7 @@ function ownedCopies(root: string, plugin: Plugin, config: Config): Output[] {
         outputs.push({
           file: path.join(harnessDir(root, plugin, harness), dir, dest),
           contents,
-          executable: (statSync(origin).mode & EXEC_BITS) !== 0,
+          executable: (statSync(origin).mode & OWNER_EXEC) !== 0,
         })
       }
     }
@@ -589,7 +591,7 @@ function ownedFiles(root: string, plugins: Plugin[], config: Config): string[] {
 }
 
 function isExecutable(file: string): boolean {
-  return (statSync(file).mode & EXEC_BITS) !== 0
+  return (statSync(file).mode & OWNER_EXEC) !== 0
 }
 
 export function drift(root: string, outputs: readonly Output[], config: Config): Drift {
@@ -615,7 +617,7 @@ export function write(root: string, outputs: readonly Output[], config: Config):
     writeFileSync(output.file, output.contents)
     if (output.executable !== undefined && isExecutable(output.file) !== output.executable) {
       const mode = statSync(output.file).mode & 0o777
-      chmodSync(output.file, output.executable ? mode | ((mode & 0o444) >> 2) : mode & ~EXEC_BITS)
+      chmodSync(output.file, output.executable ? mode | OWNER_EXEC | ((mode & 0o444) >> 2) : mode & ~EXEC_BITS)
     }
   }
 }
