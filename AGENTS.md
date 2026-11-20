@@ -21,7 +21,7 @@ harness-kit is the shared build toolkit for multi-harness agent plugin repos. It
 
 ## Rules
 
-- Generated output must stay byte-stable. Any change to `generate.ts` that alters output for an existing config is a breaking change: new behavior goes behind a config key whose default keeps the old bytes, or it ships in a major version.
+- Generated output must stay byte-stable. Any change to `generate.ts` that alters output for an existing config is a breaking change: new behavior goes behind a config key whose default keeps the old bytes, or it ships in a major version. The exception is output that was already invalid, meaning it references a file that does not exist: a fix release may change it.
 - Constants that differ between repos belong in harness-kit.json, validated in `config.ts`, with an error naming the field.
 - No runtime dependencies. Node and bun built-ins only.
 - The package files list is `src`, `runtime`, `tsconfig.base.json`, `release.config.js`.
