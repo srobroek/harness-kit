@@ -6,13 +6,17 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, st
 import path from "node:path"
 import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind } from "./config"
 import { RUNTIME_DIR, type RuntimeModuleName, resolveRuntime, vendoredSource } from "./runtime"
-import { fail, isRecord, json, nonEmptyString } from "./util"
+import { fail, httpUrl, isRecord, json, nonEmptyString } from "./util"
 
 export type { Harness, Kind }
 export type HarnessInventory = Record<Kind, string[]>
 
 /** A user-facing option. Every harness exposes it its own way; the default is a string. */
 export type PluginOption = { description: string; default: string }
+
+/** A Claude plugin dependency: a name, `name@marketplace`, or an object with an optional version range and marketplace. */
+export type ClaudeDependency = string | { name: string; version?: string; marketplace?: string }
+export type ClaudeSettings = { dependencies?: ClaudeDependency[]; homepage?: string; repository?: string }
 
 export type Plugin = {
   name: string
@@ -28,8 +32,10 @@ export type Plugin = {
   /** Name of the Claude plugin when it differs from the directory name; it sets the `/<name>:<command>` namespace. */
   claudeName?: string
   /** Author and license go into the Claude manifest, which strict validation requires. */
-  author?: { name: string }
+  author?: { name: string; url?: string }
   license?: string
+  /** Settings from the plugin's `claude` key; they apply to the Claude manifest, and homepage and repository to its marketplace entry. */
+  claude?: ClaudeSettings
   /** The Claude `userConfig` schema, copied into plugin.json as is. Exclusive with `options`. */
   userConfig?: Record<string, unknown>
   /** Items of the repo's shared directory this plugin takes, like `agents/x` or `skills/y`. Copied into every harness tree. */
@@ -123,13 +129,15 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     claudeName = nonEmptyString(where, `${key}.claudeName`, own.claudeName)
     if (!NAME_PATTERN.test(claudeName)) fail(where, `"${key}.claudeName" must be kebab-case`)
   }
-  let author: { name: string } | undefined
+  let author: { name: string; url?: string } | undefined
   if (manifest.author !== undefined) {
     const raw = manifest.author
     const authorName = typeof raw === "string" ? raw : isRecord(raw) ? raw.name : undefined
     if (typeof authorName !== "string" || !authorName.trim()) fail(where, '"author" must be a string or an object with a name')
     author = { name: authorName }
+    if (isRecord(raw) && raw.url !== undefined) author.url = httpUrl(where, "author.url", raw.url)
   }
+  const claude = readClaudeSettings(where, key, own.claude)
   const license = manifest.license === undefined ? undefined : nonEmptyString(where, "license", manifest.license)
   if (own.userConfig !== undefined && !isRecord(own.userConfig)) fail(where, `"${key}.userConfig" must be an object`)
   const userConfig = own.userConfig as Record<string, unknown> | undefined
@@ -150,10 +158,56 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     claudeName,
     author,
     license,
+    claude,
     userConfig,
     shared,
     runtime,
   }
+}
+
+const DEPENDENCY_REF = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?$/
+
+function readClaudeSettings(where: string, key: string, raw: unknown): ClaudeSettings | undefined {
+  if (raw === undefined) return undefined
+  const field = `${key}.claude`
+  if (!isRecord(raw)) fail(where, `"${field}" must be an object`)
+  const unknown = Object.keys(raw).filter((k) => !["dependencies", "homepage", "repository"].includes(k))
+  if (unknown.length > 0) fail(where, `unknown key ${unknown.map((k) => `"${field}.${k}"`).join(", ")} (allowed: dependencies, homepage, repository)`)
+  const settings: ClaudeSettings = {}
+  if (raw.homepage !== undefined) settings.homepage = httpUrl(where, `${field}.homepage`, raw.homepage)
+  if (raw.repository !== undefined) settings.repository = httpUrl(where, `${field}.repository`, raw.repository)
+  if (raw.dependencies !== undefined) settings.dependencies = readDependencies(where, `${field}.dependencies`, raw.dependencies)
+  return settings
+}
+
+function readDependencies(where: string, field: string, raw: unknown): ClaudeDependency[] {
+  if (!Array.isArray(raw) || raw.length === 0) fail(where, `"${field}" must be a non-empty list of plugin names or { name, version, marketplace } objects`)
+  const seen = new Set<string>()
+  const dependencies = raw.map((item: unknown, index): ClaudeDependency => {
+    const at = `${field}[${index}]`
+    let id: string
+    let dependency: ClaudeDependency
+    if (typeof item === "string") {
+      if (!DEPENDENCY_REF.test(item)) fail(where, `"${at}" must be a plugin name or "name@marketplace", got ${JSON.stringify(item)}`)
+      id = item
+      dependency = item
+    } else if (isRecord(item)) {
+      const extra = Object.keys(item).filter((k) => !["name", "version", "marketplace"].includes(k))
+      if (extra.length > 0) fail(where, `"${at}" has unknown key ${extra.map((k) => `"${k}"`).join(", ")} (allowed: name, version, marketplace)`)
+      const name = nonEmptyString(where, `${at}.name`, item.name)
+      if (!DEPENDENCY_REF.test(name) || name.includes("@")) fail(where, `"${at}.name" must be a plugin name, got ${JSON.stringify(name)}`)
+      dependency = { name }
+      if (item.version !== undefined) dependency.version = nonEmptyString(where, `${at}.version`, item.version)
+      if (item.marketplace !== undefined) dependency.marketplace = nonEmptyString(where, `${at}.marketplace`, item.marketplace)
+      id = dependency.marketplace ? `${name}@${dependency.marketplace}` : name
+    } else {
+      fail(where, `"${at}" must be a plugin name or an object, got ${JSON.stringify(item)}`)
+    }
+    if (seen.has(id)) fail(where, `"${field}" lists "${id}" twice`)
+    seen.add(id)
+    return dependency
+  })
+  return dependencies
 }
 
 function readShared(where: string, key: string, raw: unknown, config: Config): string[] | undefined {
@@ -385,12 +439,21 @@ function optionDefaults(root: string, plugin: Plugin): Output[] {
   return plugin.harnesses.map((harness) => ({ file: path.join(harnessDir(root, plugin, harness), "options.json"), contents: json(defaults) }))
 }
 
+/** The plugin's own `claude` links, else the repo defaults. */
+function claudeLinks(plugin: Plugin, config: Config): { homepage?: string; repository?: string } {
+  return {
+    homepage: plugin.claude?.homepage ?? config.claude.homepage,
+    repository: plugin.claude?.repository ?? config.claude.repository,
+  }
+}
+
 function manifests(root: string, plugin: Plugin, config: Config): Output[] {
   const { name, version, description, category } = plugin
   const outputs: Output[] = []
   const at = (harness: Harness, file: string) => path.join(harnessDir(root, plugin, harness), file)
   if (plugin.harnesses.includes("claude")) {
     const author = plugin.author ?? config.claude.author
+    const { homepage, repository } = claudeLinks(plugin, config)
     const license = plugin.license ?? config.claude.license
     const userConfig = plugin.userConfig ?? (plugin.options ? claudeUserConfig(plugin.options) : undefined)
     outputs.push({
@@ -400,8 +463,11 @@ function manifests(root: string, plugin: Plugin, config: Config): Output[] {
         description,
         version,
         ...(author ? { author } : {}),
+        ...(homepage ? { homepage } : {}),
+        ...(repository ? { repository } : {}),
         ...(license ? { license } : {}),
         ...(userConfig ? { userConfig } : {}),
+        ...(plugin.claude?.dependencies ? { dependencies: plugin.claude.dependencies } : {}),
       }),
     })
   }
@@ -549,13 +615,18 @@ function marketplace(plugins: Plugin[], harness: keyof typeof MARKETPLACE_DIRS, 
     metadata: { description: config.marketplace.description },
     plugins: plugins
       .filter((plugin) => plugin.harnesses.includes(harness))
-      .map((plugin) => ({
-        name: harness === "claude" ? (plugin.claudeName ?? plugin.name) : plugin.name,
-        description: plugin.description,
-        source: `./plugins/${plugin.name}/${harness}`,
-        version: plugin.version,
-        category: plugin.category,
-      })),
+      .map((plugin) => {
+        const { homepage, repository } = harness === "claude" ? claudeLinks(plugin, config) : {}
+        return {
+          name: harness === "claude" ? (plugin.claudeName ?? plugin.name) : plugin.name,
+          description: plugin.description,
+          source: `./plugins/${plugin.name}/${harness}`,
+          version: plugin.version,
+          category: plugin.category,
+          ...(homepage ? { homepage } : {}),
+          ...(repository ? { repository } : {}),
+        }
+      }),
   }
 }
 
@@ -579,7 +650,7 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
   outputs.push({
     file: path.join(root, "inventory.json"),
     contents: json({
-      plugins: entries.map(({ contents, author, license, userConfig, ...plugin }) => ({ ...plugin, harnesses: contents })),
+      plugins: entries.map(({ contents, author, license, userConfig, claude, ...plugin }) => ({ ...plugin, harnesses: contents })),
     }),
   })
   return outputs

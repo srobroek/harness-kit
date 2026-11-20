@@ -617,3 +617,90 @@ describe("config-driven behaviour", () => {
     expect(existsSync(path.join(root, ".omp-plugin"))).toBe(false)
   })
 })
+
+describe("Claude manifest links and dependencies", () => {
+  const edit = (change: (manifest: any) => void) => {
+    const file = path.join(root, demo("package.json"))
+    const manifest = JSON.parse(readFileSync(file, "utf8"))
+    change(manifest)
+    writeFileSync(file, JSON.stringify(manifest))
+  }
+  const pluginJson = () => readJson(demo("claude/.claude-plugin/plugin.json"))
+  const entry = () => readJson(".claude-plugin/marketplace.json").plugins[0]
+
+  test("with none of the new keys set, plugin.json and the marketplace entry keep their bytes", () => {
+    generate()
+    expect(read(demo("claude/.claude-plugin/plugin.json"))).toBe(
+      JSON.stringify(
+        {
+          name: "demo",
+          description: "Fixture plugin for the generator tests.",
+          version: "1.2.3",
+          author: { name: "Fixture Owner" },
+          license: "UNLICENSED",
+          userConfig: {
+            greeting: { type: "string", title: "greeting", description: "Word the demo template opens with.", default: "hello" },
+          },
+        },
+        null,
+        2,
+      ) + "\n",
+    )
+    expect(Object.keys(entry())).toEqual(["name", "description", "source", "version", "category"])
+  })
+
+  test("repo-level homepage, repository and author.url reach plugin.json; homepage and repository reach only the Claude marketplace entry", () => {
+    config.claude = { strict: true, license: "UNLICENSED", author: { name: "Fixture Owner", url: "https://example.com/owner" }, homepage: "https://example.com", repository: "https://github.com/o/r" }
+    generate()
+    expect(pluginJson()).toMatchObject({ homepage: "https://example.com", repository: "https://github.com/o/r", author: { name: "Fixture Owner", url: "https://example.com/owner" } })
+    expect(entry()).toMatchObject({ homepage: "https://example.com", repository: "https://github.com/o/r" })
+    expect(readJson(".omp-plugin/marketplace.json").plugins[0]).not.toHaveProperty("homepage")
+  })
+
+  test("a plugin's claude.homepage and claude.repository override the repo defaults", () => {
+    config.claude = { strict: true, homepage: "https://example.com", repository: "https://github.com/o/r" }
+    edit((m) => (m["agent-plugins"].claude = { homepage: "https://demo.example.com", repository: "https://github.com/o/demo" }))
+    generate()
+    expect(pluginJson()).toMatchObject({ homepage: "https://demo.example.com", repository: "https://github.com/o/demo" })
+    expect(entry()).toMatchObject({ homepage: "https://demo.example.com", repository: "https://github.com/o/demo" })
+  })
+
+  test("the package.json author url wins over the config author, which is not merged in", () => {
+    config.claude = { strict: true, author: { name: "Fixture Owner", url: "https://example.com/owner" } }
+    edit((m) => (m.author = { name: "Plugin Author", url: "https://example.com/plugin-author" }))
+    generate()
+    expect(pluginJson().author).toEqual({ name: "Plugin Author", url: "https://example.com/plugin-author" })
+  })
+
+  test("claude.dependencies are copied into plugin.json as strings and objects, in order", () => {
+    const dependencies = ["audit-logger", "tools@shared-market", { name: "secrets-vault", version: "~2.1.0" }, { name: "x", marketplace: "shared-market" }]
+    edit((m) => (m["agent-plugins"].claude = { dependencies }))
+    generate()
+    expect(pluginJson().dependencies).toEqual(dependencies)
+    expect(entry()).not.toHaveProperty("dependencies")
+  })
+
+  test.each([
+    ["dependencies that are not a list", { dependencies: "a" }, /claude\.dependencies/],
+    ["an empty dependencies list", { dependencies: [] }, /claude\.dependencies/],
+    ["a dependency that is a number", { dependencies: [1] }, /claude\.dependencies\[0\]/],
+    ["a dependency name with spaces", { dependencies: ["a b"] }, /claude\.dependencies\[0\]/],
+    ["a dependency object without a name", { dependencies: [{ version: "^1" }] }, /claude\.dependencies\[0\]\.name/],
+    ["a dependency object with an unknown key", { dependencies: [{ name: "a", range: "^1" }] }, /claude\.dependencies\[0\].*range/],
+    ["an empty dependency version", { dependencies: [{ name: "a", version: "" }] }, /claude\.dependencies\[0\]\.version/],
+    ["a non-string dependency marketplace", { dependencies: [{ name: "a", marketplace: 3 }] }, /claude\.dependencies\[0\]\.marketplace/],
+    ["a dependency listed twice", { dependencies: ["a", { name: "a" }] }, /claude\.dependencies.*"a" twice/],
+    ["a homepage that is not a URL", { homepage: "example" }, /claude\.homepage/],
+    ["a repository that is not http(s)", { repository: "git@github.com:o/r.git" }, /claude\.repository/],
+    ["an unknown claude key", { homepages: "x" }, /claude\.homepages/],
+    ["a claude value that is not an object", "x", /"agent-plugins\.claude"|claude/],
+  ])("rejects %s", (_label, claude, message) => {
+    edit((m) => (m["agent-plugins"].claude = claude))
+    expect(() => readPlugins(root, config)).toThrow(message)
+  })
+
+  test("rejects a package.json author url that is not a URL", () => {
+    edit((m) => (m.author = { name: "A", url: "nope" }))
+    expect(() => readPlugins(root, config)).toThrow(/author\.url/)
+  })
+})
