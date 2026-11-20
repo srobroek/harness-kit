@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/harness-kit",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "Shared build tooling for multi-harness agent plugin repos: generator, version stamping, Claude validation, presets and CI workflows.",
   "license": "Apache-2.0",
   "repository": {
