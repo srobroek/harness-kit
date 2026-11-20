@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { type Config, loadConfig } from "../src/config"
@@ -253,6 +253,44 @@ describe("inventory", () => {
     writeFileSync(path.join(root, demo("package.json")), JSON.stringify(manifest))
     generate()
     expect(read("INVENTORY.md")).not.toContain("Harness discrepancies")
+  })
+})
+
+describe("executable bit", () => {
+  const source = () => path.join(root, demo("common/skills/demo-skill/run.py"))
+  const copies = () => ["opencode", "claude", "omp"].map((h) => path.join(root, demo(`${h}/skills/demo-skill/run.py`)))
+  const isExec = (file: string) => (statSync(file).mode & 0o111) !== 0
+  beforeEach(() => {
+    writeFileSync(source(), "#!/usr/bin/env python3\n")
+    chmodSync(source(), 0o755)
+  })
+
+  test("copies of an executable source are executable", () => {
+    generate()
+    expect(copies().map(isExec)).toEqual([true, true, true])
+  })
+
+  test("copies of a plain source are not executable", () => {
+    chmodSync(source(), 0o644)
+    generate()
+    expect(copies().map(isExec)).toEqual([false, false, false])
+  })
+
+  test("a copy that lost the bit is stale, and write restores it", () => {
+    generate()
+    chmodSync(copies()[0]!, 0o644)
+    expect(staleFiles()).toEqual([demo("opencode/skills/demo-skill/run.py")])
+    generate()
+    expect(isExec(copies()[0]!)).toBe(true)
+    expect(staleFiles()).toEqual([])
+  })
+
+  test("dropping the bit from the source clears it on the copies", () => {
+    generate()
+    chmodSync(source(), 0o644)
+    expect(staleFiles()).toHaveLength(3)
+    generate()
+    expect(copies().map(isExec)).toEqual([false, false, false])
   })
 })
 
