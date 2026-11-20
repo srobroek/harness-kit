@@ -1,3 +1,9 @@
+## [1.3.1](https://github.com/srobroek/harness-kit/compare/v1.3.0...v1.3.1) (2026-11-20)
+
+### Bug Fixes
+
+* **build:** preserve the executable bit when copying common files ([5e7928a](https://github.com/srobroek/harness-kit/commit/5e7928a01341c964f6f17a294050a143e10fb878))
+
 ## [1.3.0](https://github.com/srobroek/harness-kit/compare/v1.2.0...v1.3.0) (2026-11-20)
 
 ### Features
