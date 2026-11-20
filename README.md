@@ -47,7 +47,8 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `npm ci`
 | `ompScope` | `@agent-plugins` | npm scope of the generated OMP package name. |
 | `generatedBy` | `harness-kit build` | Names the generator in the note at the top of generated Markdown. |
 | `claude.strict` | `true` | `validate-claude` passes `--strict` to `claude plugin validate`. |
-| `claude.author`, `claude.license` | none | Written to a Claude manifest whose `package.json` sets no `author` or `license`. |
+| `claude.author`, `claude.license` | none | Written to a Claude manifest whose `package.json` sets no `author` or `license`. `claude.author` also takes a `url`. |
+| `claude.homepage`, `claude.repository` | none | `http(s)` URLs written to every Claude manifest and Claude marketplace entry. A plugin's own `claude` settings override them. |
 | `omp.packageType` | none | `"module"` or `"commonjs"`: adds `type` to the generated OMP `package.json`. |
 
 ### Plugin settings
@@ -55,6 +56,10 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `npm ci`
 Each plugin's `package.json` carries `name` (equal to the directory), `version`, and the `agent-plugins` key (or your `pluginKey`) with `description`, `category`, `harnesses`, and optionally `scope`, `discrepancies`, `claudeName`, `options` or `userConfig`. Standard `author` and `license` fields go into the Claude manifest.
 
 - `claudeName` renames the plugin in Claude's manifest and marketplace, which sets the `/<name>:<command>` namespace.
+- `claude` (optional object) holds Claude-only settings:
+  - `dependencies`: a non-empty list copied into the manifest's `dependencies`. Each item is a plugin name, `"name@marketplace"`, or `{ "name", "version", "marketplace" }` where `version` is a semver range such as `~2.1.0`. See [Claude's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies.md). Declaring a dependency on another marketplace also needs that marketplace in `allowCrossMarketplaceDependenciesOn` in your `marketplace.json`, which this tool does not write.
+  - `homepage`, `repository`: `http(s)` URLs that replace the repo-level `claude.homepage` and `claude.repository` for this plugin.
+- A `package.json` `author` object may carry a `url`. It is used only when `harness-kit.json` sets `claude.author.url`, so existing repos keep their output. It replaces the whole `claude.author` default; the two are not merged.
 - `options` (name to `{ description, default }`) become a Claude `userConfig` and an `options.json` in every harness tree.
 - `userConfig` is copied into the Claude manifest as is. Setting both `options` and `userConfig` is an error.
 - `common/<dir>/x.<harness>.md` replaces `x.md` in that harness only.
@@ -137,6 +142,36 @@ The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `
   // release.config.mjs
   import { releaseConfig } from "@srobroek/harness-kit/release.config.js"
   export default releaseConfig({ forge: ["@semantic-release/gitlab", { gitlabUrl: "https://gitlab.example.com" }] })
+  ```
+
+  Pass `releaseRules` to change which commits cut a release. The list goes to `@semantic-release/commit-analyzer` next to the `conventionalcommits` preset. Without it the output is unchanged. A commit that matches several rules gets the highest release, whatever the order. A commit that matches no rule gets the preset's defaults.
+
+  Once a rule matches a commit, the defaults no longer apply to it. A `refactor!:` commit then cuts only a patch, unless a rule such as `{ breaking: true, release: "major" }` also matches it. Keep that guard in the list.
+
+  ```js
+  // release patches for refactor: and docs: commits
+  export default releaseConfig({
+    releaseRules: [
+      { breaking: true, release: "major" }, // without it, "refactor!:" matches only the patch rule
+      { type: "refactor", release: "patch" },
+      { type: "docs", release: "patch" },
+    ],
+  })
+  ```
+
+  multi-semantic-release merges a package's own semantic-release config over the shared one with `Object.assign`, so a package's `plugins` replaces the whole list. A dry run with `@anolilab/multi-semantic-release` 4.6.3 confirmed that a `release.config.mjs` in a package directory is loaded and its `releaseRules` apply to that package only. To give one package other rules, such as a package below 1.0 that treats a breaking change as a minor release, put a `release.config.mjs` in that package's directory that calls `releaseConfig` again with its own rules and the same `forge`:
+
+  ```js
+  // plugins/cad/release.config.mjs
+  import { releaseConfig } from "@srobroek/harness-kit/release.config.js"
+  export default releaseConfig({
+    forge: ["@semantic-release/github"],
+    releaseRules: [
+      { breaking: true, release: "minor" },
+      { type: "refactor", release: "patch" },
+      { type: "docs", release: "patch" },
+    ],
+  })
   ```
 
   Its `prepareCmd` runs `harness-kit stamp "$(basename "$PWD")" ${nextRelease.version} --git-add`. Install `semantic-release`, `@anolilab/multi-semantic-release`, `@semantic-release/changelog`, `@semantic-release/exec`, `@semantic-release/git`, `conventional-changelog-conventionalcommits` and `@visulima/yaml` (which multi-semantic-release imports without declaring) as dev dependencies. Keep `.multi-releaserc` (tag format) in your repo.

@@ -5,18 +5,25 @@
 //   export default releaseConfig({ forge: ["@semantic-release/gitlab", { gitlabUrl: "https://gitlab.example.com" }] })
 //
 // The forge plugin (GitLab, GitHub) belongs to the consumer, so it is a required argument of the function form.
+// releaseRules (commit-analyzer rules) change which commit types cut a release:
+//   releaseConfig({ releaseRules: [{ breaking: true, release: "major" }, { type: "refactor", release: "patch" }, { type: "docs", release: "patch" }] })
+// Keep the breaking rule: a commit that matches any rule skips the defaults, so "refactor!:" would otherwise cut only a patch.
+// multi-semantic-release merges a package's own release config over this one with Object.assign, so a package that needs other rules
+// carries its own release.config.mjs that calls releaseConfig again; the whole config is replaced, not just the rules.
 // The consumer installs semantic-release and the plugins used here as devDependencies.
 
 /**
- * @param {{ forge?: string | [string, object], branches?: string[], assets?: string[] }} [options]
+ * @param {{ forge?: string | [string, object], branches?: string[], assets?: string[], releaseRules?: object[] }} [options]
  *   forge: the plugin that publishes the release on the host; omitted, no release is published.
  *   assets: files, relative to the plugin directory, that the release commit includes.
+ *   releaseRules: @semantic-release/commit-analyzer `releaseRules`, a list of { type, scope, breaking, release, ... }; omitted, the preset's defaults apply.
  */
-export function releaseConfig({ forge, branches = ["main"], assets } = {}) {
+export function releaseConfig({ forge, branches = ["main"], assets, releaseRules } = {}) {
+  if (releaseRules !== undefined && !Array.isArray(releaseRules)) throw new TypeError("releaseConfig: releaseRules must be an array of commit-analyzer rules")
   return {
     branches,
     plugins: [
-      ["@semantic-release/commit-analyzer", { preset: "conventionalcommits" }],
+      ["@semantic-release/commit-analyzer", { preset: "conventionalcommits", ...(releaseRules ? { releaseRules } : {}) }],
       ["@semantic-release/release-notes-generator", { preset: "conventionalcommits" }],
       ["@semantic-release/changelog", { changelogFile: "CHANGELOG.md" }],
       [

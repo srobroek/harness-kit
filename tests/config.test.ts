@@ -54,6 +54,10 @@ describe("resolveConfig errors", () => {
     ["a non-boolean claude.strict", with_({ claude: { strict: "yes" } }), /"claude.strict"/],
     ["an unknown claude key", with_({ claude: { lenient: true } }), /"claude.lenient"/],
     ["a claude.author without a name", with_({ claude: { author: {} } }), /"claude.author.name"/],
+    ["an unknown claude.author key", with_({ claude: { author: { name: "o", email: "x" } } }), /"claude.author.email"/],
+    ["a claude.homepage that is not a URL", with_({ claude: { homepage: "example" } }), /"claude.homepage"/],
+    ["a claude.repository with a non-http scheme", with_({ claude: { repository: "ftp://example.com/r" } }), /"claude.repository"/],
+    ["a claude.author.url that is not a URL", with_({ claude: { author: { name: "o", url: "x" } } }), /"claude.author.url"/],
     ["an invalid omp.packageType", with_({ omp: { packageType: "esm" } }), /"omp.packageType"/],
   ])("rejects %s", (_label, raw, message) => {
     expect(() => resolveConfig(raw)).toThrow(message)
@@ -61,6 +65,13 @@ describe("resolveConfig errors", () => {
 
   test("names the file in every error", () => {
     expect(() => resolveConfig({}, "my.json")).toThrow(/^my\.json: /)
+  })
+})
+
+describe("claude link defaults", () => {
+  test("homepage, repository and author.url are kept", () => {
+    const claude = resolveConfig(with_({ claude: { homepage: "https://e.com", repository: "https://github.com/o/r", author: { name: "o", url: "https://e.com/o" } } })).claude
+    expect(claude).toEqual({ strict: true, homepage: "https://e.com", repository: "https://github.com/o/r", author: { name: "o", url: "https://e.com/o" } })
   })
 })
 

@@ -2,7 +2,7 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
-import { fail, isRecord, nonEmptyString } from "./util"
+import { fail, httpUrl, isRecord, nonEmptyString } from "./util"
 
 export const CONFIG_FILE = "harness-kit.json"
 
@@ -32,9 +32,12 @@ export type Config = {
     /** `harness-kit validate-claude` runs `claude plugin validate --strict` when true. */
     strict: boolean
     /** Written to a Claude manifest whose package.json sets no author. */
-    author?: { name: string }
+    author?: { name: string; url?: string }
     /** Written to a Claude manifest whose package.json sets no license. */
     license?: string
+    /** Default `homepage` and `repository` of every Claude manifest and marketplace entry; a plugin's `claude` settings override them. */
+    homepage?: string
+    repository?: string
   }
   omp: { packageType?: "module" | "commonjs" }
 }
@@ -100,16 +103,20 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
   const claude: Config["claude"] = { strict: true }
   if (raw.claude !== undefined) {
     if (!isRecord(raw.claude)) fail(where, '"claude" must be an object')
-    onlyKeys(where, "claude.", raw.claude, ["strict", "author", "license"])
+    onlyKeys(where, "claude.", raw.claude, ["strict", "author", "license", "homepage", "repository"])
     if (raw.claude.strict !== undefined) {
       if (typeof raw.claude.strict !== "boolean") fail(where, '"claude.strict" must be true or false')
       claude.strict = raw.claude.strict
     }
     if (raw.claude.author !== undefined) {
       if (!isRecord(raw.claude.author)) fail(where, '"claude.author" must be an object with a name')
+      onlyKeys(where, "claude.author.", raw.claude.author, ["name", "url"])
       claude.author = { name: nonEmptyString(where, "claude.author.name", raw.claude.author.name) }
+      if (raw.claude.author.url !== undefined) claude.author.url = httpUrl(where, "claude.author.url", raw.claude.author.url)
     }
     if (raw.claude.license !== undefined) claude.license = nonEmptyString(where, "claude.license", raw.claude.license)
+    if (raw.claude.homepage !== undefined) claude.homepage = httpUrl(where, "claude.homepage", raw.claude.homepage)
+    if (raw.claude.repository !== undefined) claude.repository = httpUrl(where, "claude.repository", raw.claude.repository)
   }
 
   const omp: Config["omp"] = {}
