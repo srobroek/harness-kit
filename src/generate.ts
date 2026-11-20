@@ -356,10 +356,17 @@ function opencodeFile(root: string, plugin: Plugin, base: "index" | "tui"): stri
   return [`${base}.ts`, `${base}.js`].find((file) => existsSync(path.join(dir, file)))
 }
 
-/** The `exports` map of the OpenCode package: the server entry, plus `./tui` when the tree has a TUI half. */
+/**
+ * The `exports` map of the OpenCode package: the server entry, plus `./tui` when the tree has a TUI half.
+ * A TUI-only tree has no server entry, so `.` is left out rather than pointing at a missing file.
+ */
 function opencodeExports(root: string, plugin: Plugin): Record<string, string> {
+  const server = opencodeFile(root, plugin, "index")
   const tui = opencodeFile(root, plugin, "tui")
-  return { ".": `./${opencodeFile(root, plugin, "index") ?? "index.js"}`, ...(tui ? { "./tui": `./${tui}` } : {}) }
+  return {
+    ...(server || !tui ? { ".": `./${server ?? "index.js"}` } : {}),
+    ...(tui ? { "./tui": `./${tui}` } : {}),
+  }
 }
 
 function claudeUserConfig(options: Record<string, PluginOption>) {
