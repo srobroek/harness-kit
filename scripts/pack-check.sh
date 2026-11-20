@@ -3,7 +3,7 @@
 # and run the CLI from each install against a copy of the test fixture repo.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
-work=$(mktemp -d "${TMPDIR:-/tmp/opencode}/harness-kit-pack.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/harness-kit-pack.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 cd "$here"
