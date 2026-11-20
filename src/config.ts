@@ -80,6 +80,7 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
       if (typeof dir !== "string" || !DIR_NAME.test(dir)) fail(where, `"commonDirs" entry ${JSON.stringify(dir)} must be a plain directory name`)
     }
     if (new Set(raw.commonDirs).size !== raw.commonDirs.length) fail(where, '"commonDirs" lists a directory twice')
+    if (raw.commonDirs.includes("_kit")) fail(where, '"commonDirs" cannot list "_kit", which holds the vendored runtime modules')
     commonDirs = raw.commonDirs as string[]
   }
 

@@ -10,7 +10,7 @@ cd "$here"
 tarball=$(npm pack --pack-destination "$work" --silent)
 listing=$(tar -tzf "$work/$tarball")
 
-for want in package/src/cli.ts package/src/index.ts package/tsconfig.base.json package/release.config.js package/package.json package/README.md; do
+for want in package/src/cli.ts package/src/index.ts package/tsconfig.base.json package/release.config.js package/runtime/opencode/content.ts package/runtime/claude/render.mjs package/runtime/omp/template-extension.ts package/package.json package/README.md; do
   echo "$listing" | grep -qx "$want" || { echo "tarball is missing $want" >&2; exit 1; }
 done
 if echo "$listing" | grep -E '^package/(tests|scripts|\.github)/|\.test\.ts$|fixtures'; then

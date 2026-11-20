@@ -1,5 +1,12 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "allowJs": true },
-  "include": ["src", "tests/*.ts", "release.config.js"]
+  "compilerOptions": {
+    "allowJs": true
+  },
+  "include": [
+    "src",
+    "runtime",
+    "tests/*.ts",
+    "release.config.js"
+  ]
 }

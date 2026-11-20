@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind } from "./config"
+import { RUNTIME_DIR, type RuntimeModuleName, resolveRuntime, vendoredSource } from "./runtime"
 import { fail, isRecord, json, nonEmptyString } from "./util"
 
 export type { Harness, Kind }
@@ -31,6 +32,8 @@ export type Plugin = {
   license?: string
   /** The Claude `userConfig` schema, copied into plugin.json as is. Exclusive with `options`. */
   userConfig?: Record<string, unknown>
+  /** Runtime modules vendored into the harness trees as `_kit/`, with their dependencies. Absent when the plugin opts out. */
+  runtime?: RuntimeModuleName[]
 }
 
 export type Output = { file: string; contents: string | Buffer }
@@ -124,13 +127,15 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
   if (own.userConfig !== undefined && !isRecord(own.userConfig)) fail(where, `"${key}.userConfig" must be an object`)
   const userConfig = own.userConfig as Record<string, unknown> | undefined
   if (options && userConfig) fail(where, `set either "${key}.options" or "${key}.userConfig", not both: options generate the userConfig`)
+  const selectedHarnesses = KNOWN_HARNESSES.filter((h) => harnesses.includes(h))
+  const runtime = readRuntime(where, key, own.runtime, selectedHarnesses)
   // Keep canonical harness order so output does not depend on how the author ordered the list.
   return {
     name,
     version,
     description,
     category,
-    harnesses: KNOWN_HARNESSES.filter((h) => harnesses.includes(h)),
+    harnesses: selectedHarnesses,
     scope,
     discrepancies,
     options,
@@ -138,6 +143,19 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     author,
     license,
     userConfig,
+    runtime,
+  }
+}
+
+function readRuntime(where: string, key: string, raw: unknown, harnesses: Harness[]): RuntimeModuleName[] | undefined {
+  if (raw === undefined || raw === false) return undefined
+  const valid = raw === true || (Array.isArray(raw) && raw.length > 0 && raw.every((item) => typeof item === "string"))
+  if (!valid) fail(where, `"${key}.runtime" must be true or a non-empty list of module names`)
+  try {
+    const modules = resolveRuntime(raw as boolean | string[], harnesses)
+    return modules.length > 0 ? modules : undefined
+  } catch (error) {
+    return fail(where, `"${key}.runtime": ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -233,6 +251,14 @@ function ownedCopies(root: string, plugin: Plugin, config: Config): Output[] {
     }
   }
   return outputs
+}
+
+/** The opted-in runtime modules, copied into each harness tree's `_kit/` directory. */
+function runtimeCopies(root: string, plugin: Plugin, config: Config): Output[] {
+  return (plugin.runtime ?? []).map((name) => {
+    const { harness, file, contents } = vendoredSource(name, config.generatedBy)
+    return { file: path.join(harnessDir(root, plugin, harness), RUNTIME_DIR, file), contents }
+  })
 }
 
 function ompExtensions(root: string, plugin: Plugin): string[] {
@@ -455,7 +481,7 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
     }))
   const entries: PluginInventory[] = []
   for (const plugin of plugins) {
-    const copies = ownedCopies(root, plugin, config)
+    const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config)]
     const entry = buildInventory(root, plugin, copies, config)
     entries.push(entry)
     outputs.push(...manifests(root, plugin, config), ...optionDefaults(root, plugin), ...copies)
@@ -475,7 +501,7 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
 function ownedFiles(root: string, plugins: Plugin[], config: Config): string[] {
   return plugins.flatMap((plugin) =>
     plugin.harnesses.flatMap((harness) =>
-      config.commonDirs.flatMap((dir) => {
+      [...config.commonDirs, RUNTIME_DIR].flatMap((dir) => {
         const base = path.join(harnessDir(root, plugin, harness), dir)
         return listFiles(base).map((file) => path.join(base, file))
       }),
