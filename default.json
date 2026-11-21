@@ -8,6 +8,7 @@
     {
       "description": "The package pin, the workflow tags and the versions in Markdown share one version; one group keeps them equal.",
       "matchManagers": [
+        "bun",
         "npm",
         "github-actions",
         "custom.regex"

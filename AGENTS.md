@@ -8,17 +8,17 @@ Stack, toolchain versions, commands and approved departures: [docs/engineering.m
 
 - `src/config.ts`: harness-kit.json schema, defaults, validation.
 - `src/generate.ts`: reads `plugins/<name>/`, renders every generated file, detects drift.
-- `src/cli.ts`: the `harness-kit` command. `src/update.ts`, `src/validate-claude.ts`, `src/workflow-refs.ts` back its commands.
+- `src/cli.ts`: the `harness-kit` command. `src/update.ts`, `src/validate-claude.ts`, `src/workflow-refs.ts` back its commands. `src/package-manager.ts` picks bun or npm for a consumer repo from its lockfile.
 - Shared items: `resolveShared` in `src/generate.ts` resolves a plugin's `shared` list against `<sharedDir>/`; the copies are ordinary common files, so drift and stale removal reuse the `commonDirs` handling.
 - `src/runtime.ts`, `runtime/<harness>/`: the modules plugins vendor into `<harness>/_kit/`. `src/testing.ts`: the `@srobroek/harness-kit/testing` helpers.
 - `release.config.js`, `tsconfig.base.json`: presets that consumers extend. `default.json`: the Renovate preset.
-- `.github/workflows/`: `ci.yml` and `publish.yml` are this repo's own; `check.yml` and `release.yml` are reusable workflows for consumers.
+- `.github/workflows/`: `ci.yml` and `publish.yml` are this repo's own; `check.yml` and `release.yml` are reusable workflows for consumers. `check.yml` installs with bun when the consumer has `bun.lock`, and with `npm ci` when it still has `package-lock.json`.
 - `templates/`: files consumers copy.
 - `tests/fixtures/repo`: the plugin repo the tests copy and generate.
 
 ## Commands
 
-- `bun install --frozen-lockfile`, then `bun test` and `bunx tsc`. `just` wraps every script; `just verify` is the CI gate.
+- `bun install --frozen-lockfile`, then `bun test` and `bunx tsc`. `just` wraps every script; `just verify` is the CI gate, and CI calls `just` recipes. `.mise.toml` pins bun and just. `just release-dry-run` previews the next version.
 - `bun run pack-check`: packs the tarball, installs it with `bun install` and runs the CLI.
 
 ## Rules

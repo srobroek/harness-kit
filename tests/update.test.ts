@@ -8,18 +8,19 @@ afterEach(cleanup)
 
 const NAME = "@srobroek/harness-kit"
 
-function repo(manifest: Record<string, unknown>): string {
+function repo(manifest: Record<string, unknown>, lockfiles: string[] = []): string {
   const root = tempDir()
   writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest))
+  for (const lockfile of lockfiles) writeFileSync(path.join(root, lockfile), "")
   return root
 }
 
-/** An exec stub: `bun info` answers `latest`; every call is recorded. */
+/** An exec stub: `bun info` and `npm view` answer `latest`; every call is recorded. */
 function stub(latest: string) {
   const calls: string[] = []
   const exec: Exec = (command, args) => {
     calls.push([path.basename(command), ...args].join(" "))
-    return args[0] === "info" ? `${latest}\n` : ""
+    return args[0] === "info" || args[0] === "view" ? `${latest}\n` : ""
   }
   return { exec, calls }
 }
@@ -51,6 +52,35 @@ describe("update", () => {
   ])("keeps a pin in %s in that field", (field, add) => {
     const { exec, calls } = stub("1.2.0")
     update(repo({ [field]: { [NAME]: "1.0.0" } }), { exec })
+    expect(calls[1]).toBe(add)
+  })
+
+  test.each<[string, string[], string]>([
+    ["no lockfile", [], "bun"],
+    ["bun.lock", ["bun.lock"], "bun"],
+    ["bun.lockb", ["bun.lockb"], "bun"],
+    ["package-lock.json only", ["package-lock.json"], "npm"],
+    ["package-lock.json and bun.lock", ["package-lock.json", "bun.lock"], "bun"],
+    ["package-lock.json and bun.lockb", ["package-lock.json", "bun.lockb"], "bun"],
+  ])("%s: the version lookup runs through %s", (_name, lockfiles, manager) => {
+    const { exec, calls } = stub("1.0.0")
+    update(repo({ devDependencies: { [NAME]: "1.0.0" } }, lockfiles), { exec })
+    expect(calls[0]?.split(" ")[0]).toBe(manager)
+  })
+
+  test("a package-lock.json repo is updated with npm, then built with the installed CLI", () => {
+    const { exec, calls } = stub("1.2.0")
+    const root = repo({ devDependencies: { [NAME]: "1.0.0" } }, ["package-lock.json"])
+    expect(update(root, { exec }).status).toBe("updated")
+    expect(calls).toEqual([`npm view ${NAME} version`, `npm install --save-exact --save-dev ${NAME}@1.2.0`, expect.stringMatching(/^harness-kit build --root /)])
+  })
+
+  test.each([
+    ["dependencies", `npm install --save-exact ${NAME}@1.2.0`],
+    ["optionalDependencies", `npm install --save-exact --save-optional ${NAME}@1.2.0`],
+  ])("npm keeps a pin in %s in that field", (field, add) => {
+    const { exec, calls } = stub("1.2.0")
+    update(repo({ [field]: { [NAME]: "1.0.0" } }, ["package-lock.json"]), { exec })
     expect(calls[1]).toBe(add)
   })
 
