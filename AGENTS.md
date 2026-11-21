@@ -2,6 +2,8 @@
 
 harness-kit is the shared build toolkit for multi-harness agent plugin repos. It is published to npm as `@srobroek/harness-kit`. TypeScript source runs under bun; there is no build step.
 
+Stack, toolchain versions, commands and approved departures: [docs/engineering.md](docs/engineering.md).
+
 ## Layout
 
 - `src/config.ts`: harness-kit.json schema, defaults, validation.
