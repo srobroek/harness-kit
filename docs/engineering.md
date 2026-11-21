@@ -6,10 +6,10 @@ This file describes how to build and check this repo. `AGENTS.md` holds the rule
 
 | Part | Version | Use |
 | --- | --- | --- |
-| bun | 1.4.4 | Runtime for the TypeScript source (no build step), package manager, test runner. Pinned in `.mise.toml`, `package.json` and the reusable workflows' `bun-version` input; keep them equal. |
+| bun | 1.4.5 | Runtime for the TypeScript source (no build step), package manager, test runner. Pinned in `.mise.toml`, `package.json` and the reusable workflows' `bun-version` input; keep them equal. |
 | TypeScript | 5.9.3 | Type check only (`tsc`, no emit). |
 | just | 1.58.0 | The task runner. It wraps every script. Pinned in `.mise.toml`. |
-| mise | latest | Installs bun and just from `.mise.toml`, locally and in `ci.yml` and `publish.yml` (`jdx/mise-action`, SHA-pinned). |
+| mise | 2026.11.10 | Installs bun and just from `.mise.toml`, locally and in `ci.yml` and `publish.yml` (`jdx/mise-action`, SHA-pinned). Its own version is the action's `version` input. |
 | Node | 24 (`engines`: `>=24.10`) | Installed by `actions/setup-node` in the workflows. It runs semantic-release and gives `publish.yml` its npm. |
 | semantic-release | 25.0.9 | Tags `vX.Y.Z`, writes the changelog, publishes. |
 
@@ -38,7 +38,7 @@ See the Layout section of `AGENTS.md`. Source is in `src/`, vendored runtime mod
 
 A consumer migrates from npm to bun on its own schedule, so the tooling reads the lockfile:
 
-- `check.yml` runs `bun install --frozen-lockfile` when `bun.lock` (or `bun.lockb`) exists, and `npm ci` otherwise. The rest of the job runs under bun either way.
+- `check.yml` runs `bun install --frozen-lockfile` when `bun.lock` (or `bun.lockb`) exists, and `npm ci` otherwise. `scripts/install-deps.sh` is the tested source of that dispatch; `check.yml` and the GitLab template embed its body, and `tests/install-deps.test.ts` keeps the copies equal. The rest of the job runs under bun either way.
 - `harness-kit update` uses bun when a bun lockfile exists, npm when only `package-lock.json` exists, and bun when neither does (`src/package-manager.ts`).
 - `templates/gitlab-deps-bump.yml` chooses `bun install --frozen-lockfile` or `npm ci` the same way.
 - The Renovate preset's `harness-kit` group covers the `bun` and `npm` managers.
@@ -48,4 +48,4 @@ A consumer migrates from npm to bun on its own schedule, so the tooling reads th
 Bun is the default for installing, running scripts and tests. Two places use npm:
 
 - Publishing stays on npm. `publish.yml` runs `npm publish` (through `@semantic-release/npm`) and upgrades npm first. Publishing uses npm trusted publishing (OIDC) with provenance, and `bun publish` is not confirmed to support it.
-- `templates/gitlab-deps-bump.yml` installs bun with `npm install --global bun@1.4.4`, because its image is `node:24` and ships no bun.
+- `templates/gitlab-deps-bump.yml` installs bun with `npm install --global bun@1.4.5`, because its image is `node:24` and ships no bun.

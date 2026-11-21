@@ -12,7 +12,7 @@ on:
         default: "24"
       bun-version:
         type: string
-        default: "1.4.4"
+        default: "1.4.5"
 
 permissions:
   contents: read
@@ -29,9 +29,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}
-      # bun.lock repos install with bun; a repo that still commits package-lock.json installs with npm.
+      # The body of scripts/install-deps.sh: bun.lock repos install with bun; a repo that still commits package-lock.json installs with npm.
       - name: Install
         run: |
+          set -eu
           if [ -f bun.lock ] || [ -f bun.lockb ]; then
             bun install --frozen-lockfile
           else

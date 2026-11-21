@@ -19,5 +19,7 @@ jobs:
           package-manager-cache: false
       # bun and just, at the versions in .mise.toml.
       - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
+        with:
+          version: 2026.11.10
       # install, test, typecheck, then the self-check: pack the tarball, install it with bun, run the CLI.
       - run: just verify
