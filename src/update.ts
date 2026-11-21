@@ -1,13 +1,14 @@
 // `harness-kit update`: move the pinned @srobroek/harness-kit to the newest published version and regenerate.
-// It never commits or pushes; the CI job that calls it does that.
+// It reads the lockfile to pick bun or npm. It never commits or pushes; the CI job that calls it does that.
 
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
+import { type DependencyField, detectPackageManager, latestVersionCommand, pinCommand } from "./package-manager"
 import { fail, isRecord } from "./util"
 
 export const PACKAGE_NAME = "@srobroek/harness-kit"
-const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const
+const DEPENDENCY_FIELDS: readonly DependencyField[] = ["dependencies", "devDependencies", "optionalDependencies"]
 
 /** Run a command in `cwd`. `capture` returns its stdout; otherwise it inherits the terminal. Throws on a non-zero exit. */
 export type Exec = (command: string, args: string[], options: { cwd: string; capture?: boolean }) => string
@@ -38,7 +39,7 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /** The dependency field that lists the package, and its pinned version. */
-function pin(root: string): { field: (typeof DEPENDENCY_FIELDS)[number]; version: string } {
+function pin(root: string): { field: DependencyField; version: string } {
   const file = path.join(root, "package.json")
   if (!existsSync(file)) fail("package.json", `not found in ${root}`)
   const manifest: unknown = JSON.parse(readFileSync(file, "utf8"))
@@ -59,17 +60,17 @@ export function pinnedVersion(root: string): string {
   return pin(root).version
 }
 
-/** `bun add` flag that keeps the package in its current field. */
-const ADD_FLAG = { dependencies: [], devDependencies: ["--dev"], optionalDependencies: ["--optional"] } as const
-
 export function update(root: string, options: { check?: boolean; exec?: Exec } = {}): UpdateResult {
   const exec = options.exec ?? defaultExec
   const { field, version: from } = pin(root)
-  const to = exec("bun", ["info", PACKAGE_NAME, "version"], { cwd: root, capture: true }).trim()
-  if (!VERSION.test(to)) throw new Error(`bun info returned "${to}", expected a version`)
+  const manager = detectPackageManager(root)
+  const latest = latestVersionCommand(manager, PACKAGE_NAME)
+  const to = exec(latest.command, latest.args, { cwd: root, capture: true }).trim()
+  if (!VERSION.test(to)) throw new Error(`${latest.command} ${latest.args[0]} returned "${to}", expected a version`)
   if (compareVersions(to, from) <= 0) return { status: "current", from, to: from }
   if (options.check) return { status: "outdated", from, to }
-  exec("bun", ["add", "--exact", ...ADD_FLAG[field], `${PACKAGE_NAME}@${to}`], { cwd: root })
+  const add = pinCommand(manager, field, PACKAGE_NAME, to)
+  exec(add.command, add.args, { cwd: root })
   // The new release regenerates, not the copy that is running.
   exec(path.join(root, "node_modules", ".bin", "harness-kit"), ["build", "--root", root], { cwd: root })
   return { status: "updated", from, to }

@@ -1,4 +1,4 @@
-# Reusable: install, harness-kit check, bun test, tsc.
+# Reusable: install (bun.lock: bun install --frozen-lockfile, otherwise npm ci), harness-kit check, bun test, tsc.
 #   jobs:
 #     check:
 #       uses: srobroek/harness-kit/.github/workflows/check.yml@v1.0.0   # same version as the package pin
@@ -29,7 +29,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}
-      - run: bun install --frozen-lockfile
+      # bun.lock repos install with bun; a repo that still commits package-lock.json installs with npm.
+      - name: Install
+        run: |
+          if [ -f bun.lock ] || [ -f bun.lockb ]; then
+            bun install --frozen-lockfile
+          else
+            npm ci
+          fi
       - run: bunx harness-kit check
       - run: bun test
       - run: bunx tsc

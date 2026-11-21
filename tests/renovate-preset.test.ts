@@ -33,6 +33,11 @@ describe("renovate preset: Markdown managers", () => {
     expect(rule?.matchPackageNames).toEqual(["@srobroek/harness-kit", "srobroek/harness-kit"])
   })
 
+  test.each(["bun", "npm"])("the harness-kit group also takes the %s manager's pin of the package, so bun.lock and package-lock.json repos both move with the workflows", (manager) => {
+    const rule = preset.packageRules.find((r) => r.groupName === "harness-kit")
+    expect(rule?.matchManagers).toContain(manager)
+  })
+
   test("a workflow ref yields the repo and the tag with its v", () => {
     const text = "    uses: srobroek/harness-kit/.github/workflows/check.yml@v1.4.0\n    uses: srobroek/harness-kit/.github/workflows/release.yml@v12.0.10"
     expect(capture(workflowRefs, text)).toEqual([

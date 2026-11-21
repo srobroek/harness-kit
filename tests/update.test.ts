@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { detectPackageManager, type PackageManager } from "../src/package-manager"
 import { compareVersions, type Exec, update } from "../src/update"
 import { cleanup, runCli, script, tempDir } from "./helpers"
 
@@ -8,18 +9,19 @@ afterEach(cleanup)
 
 const NAME = "@srobroek/harness-kit"
 
-function repo(manifest: Record<string, unknown>): string {
+function repo(manifest: Record<string, unknown>, lockfiles: string[] = []): string {
   const root = tempDir()
   writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest))
+  for (const lockfile of lockfiles) writeFileSync(path.join(root, lockfile), "")
   return root
 }
 
-/** An exec stub: `bun info` answers `latest`; every call is recorded. */
+/** An exec stub: `bun info` and `npm view` answer `latest`; every call is recorded. */
 function stub(latest: string) {
   const calls: string[] = []
   const exec: Exec = (command, args) => {
     calls.push([path.basename(command), ...args].join(" "))
-    return args[0] === "info" ? `${latest}\n` : ""
+    return args[0] === "info" || args[0] === "view" ? `${latest}\n` : ""
   }
   return { exec, calls }
 }
@@ -54,6 +56,28 @@ describe("update", () => {
     expect(calls[1]).toBe(add)
   })
 
+  test("a package-lock.json repo is updated with npm, in the field that lists the pin", () => {
+    const { exec, calls } = stub("1.2.0")
+    const root = repo({ devDependencies: { [NAME]: "1.0.0" } }, ["package-lock.json"])
+    expect(update(root, { exec }).status).toBe("updated")
+    expect(calls).toEqual([`npm view ${NAME} version`, `npm install --save-exact --save-dev ${NAME}@1.2.0`, expect.stringMatching(/^harness-kit build --root /)])
+  })
+
+  test.each([
+    ["dependencies", `npm install --save-exact ${NAME}@1.2.0`],
+    ["optionalDependencies", `npm install --save-exact --save-optional ${NAME}@1.2.0`],
+  ])("npm keeps a pin in %s in that field", (field, add) => {
+    const { exec, calls } = stub("1.2.0")
+    update(repo({ [field]: { [NAME]: "1.0.0" } }, ["package-lock.json"]), { exec })
+    expect(calls[1]).toBe(add)
+  })
+
+  test("bun.lock wins when both lockfiles exist", () => {
+    const { exec, calls } = stub("1.0.0")
+    update(repo({ devDependencies: { [NAME]: "1.0.0" } }, ["package-lock.json", "bun.lock"]), { exec })
+    expect(calls).toEqual([`bun info ${NAME} version`])
+  })
+
   test("--check reports outdated without installing", () => {
     const { exec, calls } = stub("1.2.0")
     const result = update(repo({ devDependencies: { [NAME]: "1.0.0" } }), { exec, check: true })
@@ -81,6 +105,19 @@ describe("update", () => {
 
   test("fails when bun info prints something that is not a version", () => {
     expect(() => update(repo({ devDependencies: { [NAME]: "1.0.0" } }), { exec: stub("garbage").exec })).toThrow(/expected a version/)
+  })
+})
+
+describe("detectPackageManager", () => {
+  test.each<[string[], PackageManager]>([
+    [[], "bun"],
+    [["bun.lock"], "bun"],
+    [["bun.lockb"], "bun"],
+    [["package-lock.json"], "npm"],
+    [["package-lock.json", "bun.lock"], "bun"],
+    [["package-lock.json", "bun.lockb"], "bun"],
+  ])("lockfiles %p -> %s", (lockfiles, expected) => {
+    expect(detectPackageManager(repo({}, lockfiles))).toBe(expected)
   })
 })
 

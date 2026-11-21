@@ -1,0 +1,5 @@
+# Tool versions for local work and CI (jdx/mise-action reads this file). Node is not pinned here:
+# the workflows install it with actions/setup-node, which also wires up npm publishing.
+[tools]
+bun = "1.4.4"
+just = "1.58.0"

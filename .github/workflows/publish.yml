@@ -28,14 +28,11 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.4"
+      # bun and just, at the versions in .mise.toml.
+      - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
       # Trusted publishing needs npm 11.5.1 or later.
       - run: npm install --global npm@^11.15.0
-      - run: bun install --frozen-lockfile
-      - run: bun run test
-      - run: bun run typecheck
-      - run: bunx semantic-release
+      - run: just install test typecheck
+      - run: just release
         env:
           GITHUB_TOKEN: ${{ github.token }}

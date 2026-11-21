@@ -14,9 +14,10 @@ deps-bump:
     - if: $CI_PIPELINE_SOURCE == "schedule" && $DEPS_BUMP == "1" && $GITLAB_TOKEN
   script:
     # harness-kit runs under bun; `update` regenerates with the new release.
-    # npm only bootstraps bun on this node image.
+    # npm bootstraps bun on this node image, and installs for a repo that still commits package-lock.json.
     - npm install --global bun@1.4.4
-    - bun install --frozen-lockfile
+    - |
+      if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; else npm ci; fi
     - |
       set -eu
       latest=$(npm view @srobroek/harness-kit version)

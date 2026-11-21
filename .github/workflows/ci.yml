@@ -17,11 +17,7 @@ jobs:
         with:
           node-version: "24"
           package-manager-cache: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.4"
-      - run: bun install --frozen-lockfile
-      - run: bun run test
-      - run: bun run typecheck
-      # Self-check: pack the tarball, install it with bun, run the CLI.
-      - run: bun run pack-check
+      # bun and just, at the versions in .mise.toml.
+      - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
+      # install, test, typecheck, then the self-check: pack the tarball, install it with bun, run the CLI.
+      - run: just verify
