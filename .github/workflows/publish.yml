@@ -30,7 +30,7 @@ jobs:
           package-manager-cache: false
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.4"
+          bun-version: "1.4.5"
       # Trusted publishing needs npm 11.5.1 or later.
       - run: npm install --global npm@^11.15.0
       - run: bun install --frozen-lockfile
