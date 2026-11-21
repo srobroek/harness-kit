@@ -1,3 +1,9 @@
+## [1.5.0](https://github.com/srobroek/harness-kit/compare/v1.4.0...v1.5.0) (2026-11-21)
+
+### Features
+
+* switch tooling to bun and add just ([#17](https://github.com/srobroek/harness-kit/issues/17)) ([91acd67](https://github.com/srobroek/harness-kit/commit/91acd676931e5d0f356c45e7d87b0ab12e5c72ad))
+
 ## [1.4.0](https://github.com/srobroek/harness-kit/compare/v1.3.2...v1.4.0) (2026-11-20)
 
 ### Features
