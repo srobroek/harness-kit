@@ -97,13 +97,21 @@ describe("renovate preset: automerge", () => {
     expect(preset).toMatchObject({ automerge: false, automergeType: "pr", platformAutomerge: false, ignoreTests: false, internalChecksFilter: "strict" })
   })
 
-  test("patch updates automerge, except for 0.x packages", () => {
+  test.each([
+    ["0.9.3", true],
+    ["v0.9.3", true],
+    ["0", true],
+    ["1.0.3", false],
+    ["v1.0.3", false],
+    ["10.2.0", false],
+  ])("patch updates automerge unless the current version %s is 0.x: skipped is %s", (version, zeroX) => {
     const rule = ruleFor("patch", true)
     expect(rule?.matchUpdateTypes).toEqual(["patch"])
-    const zeroX = new RegExp((rule?.matchCurrentVersion ?? "").replace(/^!\/|\/$/g, ""))
-    expect(zeroX.test("0.9.3")).toBe(true) // the negated pattern matches 0.x, so the rule skips it
-    expect(zeroX.test("1.0.3")).toBe(false)
-    expect(rule?.matchCurrentVersion?.startsWith("!/")).toBe(true)
+    // Renovate's "!/re/" form matches a version that does NOT match re.
+    const pattern = rule?.matchCurrentVersion
+    expect(pattern?.startsWith("!/")).toBe(true)
+    const re = new RegExp(pattern?.slice(2, -1) ?? "")
+    expect(re.test(version)).toBe(zeroX)
   })
 
   test("digest and pin updates automerge", () => {
