@@ -1,9 +1,24 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Move the @srobroek/harness-kit package, the harness-kit reusable workflow refs and the versions quoted in Markdown together, as one PR.",
+  "description": "Move the @srobroek/harness-kit package, the harness-kit reusable workflow refs and the versions quoted in Markdown together, as one PR. Automerge patch, digest and pin updates once CI passes; minor updates stay reviewed and major updates get their own labelled PR.",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "security:minimumReleaseAgeNpm"
   ],
+  "labels": [
+    "dependencies"
+  ],
+  "automerge": false,
+  "automergeType": "pr",
+  "platformAutomerge": false,
+  "ignoreTests": false,
+  "internalChecksFilter": "strict",
+  "vulnerabilityAlerts": {
+    "labels": [
+      "dependencies",
+      "security"
+    ]
+  },
   "packageRules": [
     {
       "description": "The package pin, the workflow tags and the versions in Markdown share one version; one group keeps them equal.",
@@ -22,6 +37,58 @@
       "pinDigests": false,
       "semanticCommitType": "chore",
       "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Automerge patch updates once CI passes. Not 0.x: a patch there can break.",
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "matchCurrentVersion": "!/^0/",
+      "automerge": true
+    },
+    {
+      "description": "Automerge digest and pin updates once CI passes.",
+      "matchUpdateTypes": [
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "A major update opens its own PR, labelled, and is never automerged.",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "labels": [
+        "dependencies",
+        "major"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "@opencode/* moves as one set.",
+      "matchPackageNames": [
+        "@opencode/**"
+      ],
+      "groupName": "opencode"
+    },
+    {
+      "description": "Host modules: OpenCode supplies them at runtime. Pin them by hand to the root catalog of the OpenCode release that @opencode/* targets.",
+      "matchPackageNames": [
+        "@opentui/**",
+        "solid-js"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Never automerge what is not a plain dependency bump: a harness-kit bump has to regenerate files, and @opencode/* has to move with the pinned host modules. Last, so it overrides the rules above.",
+      "matchPackageNames": [
+        "@srobroek/harness-kit",
+        "srobroek/harness-kit",
+        "@opencode/**"
+      ],
+      "automerge": false
     }
   ],
   "customManagers": [

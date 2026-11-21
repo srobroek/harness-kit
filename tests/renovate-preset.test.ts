@@ -72,3 +72,63 @@ describe("renovate preset: Markdown managers", () => {
     expect(capture(packageVersions, line)).toEqual([])
   })
 })
+
+type Rule = {
+  matchUpdateTypes?: string[]
+  matchCurrentVersion?: string
+  matchPackageNames?: string[]
+  automerge?: boolean
+  enabled?: boolean
+  labels?: string[]
+  groupName?: string
+}
+const rules = preset.packageRules as Rule[]
+const ruleFor = (updateType: string, automerge: boolean) =>
+  rules.find((r) => r.matchUpdateTypes?.includes(updateType) && r.automerge === automerge)
+
+describe("renovate preset: automerge", () => {
+  test("Renovate merges itself, and only after the status checks pass", () => {
+    // platformAutomerge would merge without CI while no required-checks ruleset is active.
+    expect(preset).toMatchObject({ automerge: false, automergeType: "pr", platformAutomerge: false, ignoreTests: false, internalChecksFilter: "strict" })
+  })
+
+  test("patch updates automerge, except for 0.x packages", () => {
+    const rule = ruleFor("patch", true)
+    expect(rule?.matchUpdateTypes).toEqual(["patch"])
+    const zeroX = new RegExp((rule?.matchCurrentVersion ?? "").replace(/^!\/|\/$/g, ""))
+    expect(zeroX.test("0.9.3")).toBe(true) // the negated pattern matches 0.x, so the rule skips it
+    expect(zeroX.test("1.0.3")).toBe(false)
+    expect(rule?.matchCurrentVersion?.startsWith("!/")).toBe(true)
+  })
+
+  test("digest and pin updates automerge", () => {
+    expect(ruleFor("digest", true)?.matchUpdateTypes).toEqual(["digest", "pin", "pinDigest"])
+  })
+
+  test("minor updates are not automerged", () => {
+    expect(rules.filter((r) => r.matchUpdateTypes?.includes("minor") && r.automerge)).toEqual([])
+  })
+
+  test("a major update has its own labelled PR and never automerges", () => {
+    const rule = ruleFor("major", false)
+    expect(rule?.labels).toContain("major")
+    expect(rule?.groupName).toBeUndefined()
+  })
+
+  test("the last rule that sets automerge turns it off for the harness-kit packages and @opencode/*", () => {
+    const last = [...rules].reverse().find((r) => r.automerge !== undefined)
+    expect(last).toMatchObject({ automerge: false })
+    expect(last?.matchPackageNames).toEqual(["@srobroek/harness-kit", "srobroek/harness-kit", "@opencode/**"])
+  })
+
+  test("the host modules are disabled, so the host catalog sets their versions", () => {
+    const rule = rules.find((r) => r.enabled === false)
+    expect(rule?.matchPackageNames).toEqual(["@opentui/**", "solid-js"])
+  })
+
+  test("security fixes are labelled and, being patch or minor, not forced to automerge", () => {
+    // vulnerabilityAlerts is applied as a forced override that no packageRule can veto;
+    // setting automerge there would also automerge a major security fix.
+    expect(preset.vulnerabilityAlerts).toEqual({ labels: ["dependencies", "security"] })
+  })
+})
