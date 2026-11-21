@@ -9,14 +9,14 @@ The package is `@srobroek/harness-kit`. It ships TypeScript source that runs und
 Pin the exact version, as a dev dependency:
 
 ```sh
-npm install --save-dev --save-exact @srobroek/harness-kit
+bun add --dev --exact @srobroek/harness-kit
 ```
 
 ```json
 { "devDependencies": { "@srobroek/harness-kit": "X.Y.Z" } }
 ```
 
-bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `npm ci` and `bun install` both install it.
+bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun install` installs it.
 
 ## Config
 
@@ -189,8 +189,8 @@ jobs:
     permissions: { contents: write, issues: write, pull-requests: write }
 ```
 
-- `check.yml`: `npm ci`, `harness-kit check`, `bun test`, `tsc`.
-- `release.yml`: `npm ci`, then `multi-semantic-release` with `GITHUB_TOKEN`. Your release config names `@semantic-release/github`.
+- `check.yml`: `bun install --frozen-lockfile`, `harness-kit check`, `bun test`, `tsc`.
+- `release.yml`: `bun install --frozen-lockfile`, then `multi-semantic-release` with `GITHUB_TOKEN`. Your release config names `@semantic-release/github`.
 
 ### The workflow tag must match the package version
 
@@ -210,7 +210,7 @@ Extend the preset in `renovate.json`:
 { "extends": ["github>srobroek/harness-kit"] }
 ```
 
-The preset extends `config:recommended`. It puts the npm package, the `srobroek/harness-kit` workflow refs and the versions quoted in Markdown (`@srobroek/harness-kit@X.Y.Z`, `"@srobroek/harness-kit": "X.Y.Z"`, `…/workflows/check.yml@vX.Y.Z`) in one `harness-kit` group, so they move in one PR, pinned to the tag. Write a placeholder such as `X.Y.Z` where the exact version is not the point: the Markdown managers only match a full version. The preset is read from this repository's default branch, so a change to it reaches consumers without an npm release. Renovate's hosted app does not run `postUpgradeTasks`, so the PR arrives without the regenerated files. In CI, `harness-kit check` fails on the PR; run `npx harness-kit build` on the PR branch and push the result. Repos without Actions run `harness-kit check` locally before merging.
+The preset extends `config:recommended`. It puts the npm package, the `srobroek/harness-kit` workflow refs and the versions quoted in Markdown (`@srobroek/harness-kit@X.Y.Z`, `"@srobroek/harness-kit": "X.Y.Z"`, `…/workflows/check.yml@vX.Y.Z`) in one `harness-kit` group, so they move in one PR, pinned to the tag. Write a placeholder such as `X.Y.Z` where the exact version is not the point: the Markdown managers only match a full version. The preset is read from this repository's default branch, so a change to it reaches consumers without an npm release. Renovate's hosted app does not run `postUpgradeTasks`, so the PR arrives without the regenerated files. In CI, `harness-kit check` fails on the PR; run `bunx harness-kit build` on the PR branch and push the result. Repos without Actions run `harness-kit check` locally before merging.
 
 ### Without Renovate: `harness-kit update` in GitLab CI
 

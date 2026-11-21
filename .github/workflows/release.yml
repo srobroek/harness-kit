@@ -34,7 +34,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}
-      - run: npm ci --no-audit --no-fund
-      - run: npx multi-semantic-release
+      - run: bun install --frozen-lockfile
+      - run: bunx multi-semantic-release
         env:
           GITHUB_TOKEN: ${{ github.token }}
