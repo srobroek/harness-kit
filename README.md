@@ -129,7 +129,7 @@ harness-kit update [--check]
 | `stamp` | Sets a plugin's version, then regenerates. `--git-add` stages the generated files outside `plugins/`. For a release `prepareCmd`. | 2 on a bad version |
 | `validate-claude` | Runs `claude plugin validate` on each Claude tree, then on the marketplace. The `claude` CLI comes from `node_modules/.bin`, then `PATH`; install `@anthropic-ai/claude-code`. | 1 when rejected |
 | `check` | `build --check`, then `validate-claude`. Warns when a workflow tag differs from the package pin (below). | 1 on either failure |
-| `update` | Reads the pin in `package.json` and `npm view @srobroek/harness-kit version`. If newer, runs `npm install --save-exact`, then the new release's `build`. Prints `old -> new` or `up to date`. Never commits. `--check` only reports. | 1 with `--check` when outdated |
+| `update` | Reads the pin in `package.json` and `bun info @srobroek/harness-kit version`. If newer, runs `bun add --exact` (with `--dev` or `--optional` to match the field), then the new release's `build`. Prints `old -> new` or `up to date`. Never commits. `--check` only reports. | 1 with `--check` when outdated |
 
 The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `loadConfig` and `resolveConfig` for tests. Each takes the resolved config as its last argument.
 
