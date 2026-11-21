@@ -20,8 +20,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.4"
-      - run: npm ci --no-audit --no-fund
-      - run: npm test
-      - run: npm run typecheck
-      # Self-check: pack the tarball, install it with npm ci and with bun install, run the CLI from each.
-      - run: npm run pack-check
+      - run: bun install --frozen-lockfile
+      - run: bun run test
+      - run: bun run typecheck
+      # Self-check: pack the tarball, install it with bun, run the CLI.
+      - run: bun run pack-check

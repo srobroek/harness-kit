@@ -13,9 +13,10 @@ deps-bump:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule" && $DEPS_BUMP == "1" && $GITLAB_TOKEN
   script:
-    - npm ci --no-audit --no-fund
     # harness-kit runs under bun; `update` regenerates with the new release.
+    # npm only bootstraps bun on this node image.
     - npm install --global bun@1.4.4
+    - bun install --frozen-lockfile
     - |
       set -eu
       latest=$(npm view @srobroek/harness-kit version)
@@ -25,7 +26,7 @@ deps-bump:
         echo "$branch already exists; nothing to do"
         exit 0
       fi
-      npx harness-kit update | tee /tmp/update.log
+      bunx harness-kit update | tee /tmp/update.log
       if [ "$(tail -n 1 /tmp/update.log)" = "up to date" ]; then exit 0; fi
       title="chore(deps): bump @srobroek/harness-kit to $latest"
       git checkout -b "$branch"

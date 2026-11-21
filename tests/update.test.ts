@@ -14,12 +14,12 @@ function repo(manifest: Record<string, unknown>): string {
   return root
 }
 
-/** An exec stub: `npm view` answers `latest`; every call is recorded. */
+/** An exec stub: `bun info` answers `latest`; every call is recorded. */
 function stub(latest: string) {
   const calls: string[] = []
   const exec: Exec = (command, args) => {
     calls.push([path.basename(command), ...args].join(" "))
-    return args[0] === "view" ? `${latest}\n` : ""
+    return args[0] === "info" ? `${latest}\n` : ""
   }
   return { exec, calls }
 }
@@ -29,7 +29,7 @@ describe("update", () => {
     const { exec, calls } = stub("1.0.0")
     const result = update(repo({ devDependencies: { [NAME]: "1.0.0" } }), { exec })
     expect(result).toEqual({ status: "current", from: "1.0.0", to: "1.0.0" })
-    expect(calls).toEqual([`npm view ${NAME} version`])
+    expect(calls).toEqual([`bun info ${NAME} version`])
   })
 
   test("a registry version older than the pin is not a downgrade", () => {
@@ -38,11 +38,20 @@ describe("update", () => {
     expect(calls).toHaveLength(1)
   })
 
-  test("installs the newer version with --save-exact, then builds with the installed CLI", () => {
+  test("adds the newer version exactly, in the field that lists it, then builds with the installed CLI", () => {
     const { exec, calls } = stub("1.2.0")
     const result = update(repo({ devDependencies: { [NAME]: "1.0.0" } }), { exec })
     expect(result).toEqual({ status: "updated", from: "1.0.0", to: "1.2.0" })
-    expect(calls).toEqual([`npm view ${NAME} version`, `npm install --save-exact ${NAME}@1.2.0`, expect.stringMatching(/^harness-kit build --root /)])
+    expect(calls).toEqual([`bun info ${NAME} version`, `bun add --exact --dev ${NAME}@1.2.0`, expect.stringMatching(/^harness-kit build --root /)])
+  })
+
+  test.each([
+    ["dependencies", `bun add --exact ${NAME}@1.2.0`],
+    ["optionalDependencies", `bun add --exact --optional ${NAME}@1.2.0`],
+  ])("keeps a pin in %s in that field", (field, add) => {
+    const { exec, calls } = stub("1.2.0")
+    update(repo({ [field]: { [NAME]: "1.0.0" } }), { exec })
+    expect(calls[1]).toBe(add)
   })
 
   test("--check reports outdated without installing", () => {
@@ -70,7 +79,7 @@ describe("update", () => {
     expect(() => update(repo({ devDependencies: { [NAME]: "github:x/y" } }), { exec: stub("1.0.0").exec })).toThrow(/not a plain version/)
   })
 
-  test("fails when npm view prints something that is not a version", () => {
+  test("fails when bun info prints something that is not a version", () => {
     expect(() => update(repo({ devDependencies: { [NAME]: "1.0.0" } }), { exec: stub("garbage").exec })).toThrow(/expected a version/)
   })
 })
@@ -88,24 +97,24 @@ describe("compareVersions", () => {
   })
 })
 
-describe("harness-kit update (CLI, fake npm on PATH)", () => {
-  // The fake npm answers `view` with $FAKE_LATEST, and `install` rewrites the pin and drops a fake harness-kit bin.
+describe("harness-kit update (CLI, fake bun on PATH)", () => {
+  // The fake bun answers `info` with $FAKE_LATEST, and `add` rewrites the pin and drops a fake harness-kit bin.
   function fakeProject(pinned: string) {
     const root = repo({ name: "consumer", devDependencies: { [NAME]: pinned } })
     writeFileSync(path.join(root, "harness-kit.json"), "{}")
     const bin = tempDir()
     script(
-      path.join(bin, "npm"),
+      path.join(bin, "bun"),
       `case "$1" in
-  view) echo "$FAKE_LATEST" ;;
-  install)
-    sed "s/\\"$NPM_FROM\\"/\\"$FAKE_LATEST\\"/" package.json > package.json.new && mv package.json.new package.json
+  info) echo "$FAKE_LATEST" ;;
+  add)
+    sed "s/\\"$FAKE_FROM\\"/\\"$FAKE_LATEST\\"/" package.json > package.json.new && mv package.json.new package.json
     mkdir -p node_modules/.bin
     printf '#!/bin/sh\\necho built "$@" > built.txt\\n' > node_modules/.bin/harness-kit
     chmod +x node_modules/.bin/harness-kit ;;
 esac`,
     )
-    return { root, env: { PATH: `${bin}:${process.env.PATH}`, FAKE_LATEST: "1.1.0", NPM_FROM: pinned } }
+    return { root, env: { PATH: `${bin}:${process.env.PATH}`, FAKE_LATEST: "1.1.0", FAKE_FROM: pinned } }
   }
 
   test("prints old -> new, pins the new version and rebuilds", () => {

@@ -37,8 +37,8 @@ export function compareVersions(a: string, b: string): number {
   return pa[4] < pb[4] ? -1 : 1
 }
 
-/** The pinned version of the package in the first dependency field that lists it. */
-export function pinnedVersion(root: string): string {
+/** The dependency field that lists the package, and its pinned version. */
+function pin(root: string): { field: (typeof DEPENDENCY_FIELDS)[number]; version: string } {
   const file = path.join(root, "package.json")
   if (!existsSync(file)) fail("package.json", `not found in ${root}`)
   const manifest: unknown = JSON.parse(readFileSync(file, "utf8"))
@@ -48,20 +48,28 @@ export function pinnedVersion(root: string): string {
     if (typeof spec === "string") {
       const version = spec.replace(/^[\^~=v]+/, "")
       if (!VERSION.test(version)) fail("package.json", `${field}["${PACKAGE_NAME}"] is "${spec}", which is not a plain version`)
-      return version
+      return { field, version }
     }
   }
   return fail("package.json", `${PACKAGE_NAME} is not in dependencies, devDependencies or optionalDependencies`)
 }
 
+/** The pinned version of the package in the first dependency field that lists it. */
+export function pinnedVersion(root: string): string {
+  return pin(root).version
+}
+
+/** `bun add` flag that keeps the package in its current field. */
+const ADD_FLAG = { dependencies: [], devDependencies: ["--dev"], optionalDependencies: ["--optional"] } as const
+
 export function update(root: string, options: { check?: boolean; exec?: Exec } = {}): UpdateResult {
   const exec = options.exec ?? defaultExec
-  const from = pinnedVersion(root)
-  const to = exec("npm", ["view", PACKAGE_NAME, "version"], { cwd: root, capture: true }).trim()
-  if (!VERSION.test(to)) throw new Error(`npm view returned "${to}", expected a version`)
+  const { field, version: from } = pin(root)
+  const to = exec("bun", ["info", PACKAGE_NAME, "version"], { cwd: root, capture: true }).trim()
+  if (!VERSION.test(to)) throw new Error(`bun info returned "${to}", expected a version`)
   if (compareVersions(to, from) <= 0) return { status: "current", from, to: from }
   if (options.check) return { status: "outdated", from, to }
-  exec("npm", ["install", "--save-exact", `${PACKAGE_NAME}@${to}`], { cwd: root })
+  exec("bun", ["add", "--exact", ...ADD_FLAG[field], `${PACKAGE_NAME}@${to}`], { cwd: root })
   // The new release regenerates, not the copy that is running.
   exec(path.join(root, "node_modules", ".bin", "harness-kit"), ["build", "--root", root], { cwd: root })
   return { status: "updated", from, to }

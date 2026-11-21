@@ -2,6 +2,8 @@
 
 harness-kit is the shared build toolkit for multi-harness agent plugin repos. It is published to npm as `@srobroek/harness-kit`. TypeScript source runs under bun; there is no build step.
 
+Stack, toolchain versions, commands and approved departures: [docs/engineering.md](docs/engineering.md).
+
 ## Layout
 
 - `src/config.ts`: harness-kit.json schema, defaults, validation.
@@ -16,8 +18,8 @@ harness-kit is the shared build toolkit for multi-harness agent plugin repos. It
 
 ## Commands
 
-- `npm ci`, then `bun test` and `npx tsc`.
-- `npm run pack-check`: packs the tarball, then installs it with `npm ci` and with `bun install` and runs the CLI from each.
+- `bun install --frozen-lockfile`, then `bun test` and `bunx tsc`. `just` wraps every script; `just verify` is the CI gate.
+- `bun run pack-check`: packs the tarball, installs it with `bun install` and runs the CLI.
 
 ## Rules
 
