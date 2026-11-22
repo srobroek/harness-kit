@@ -1,3 +1,9 @@
+## [1.7.0](https://github.com/srobroek/harness-kit/compare/v1.6.0...v1.7.0) (2026-11-22)
+
+### Features
+
+* **renovate:** automerge patch, digest, pin and security updates once CI passes ([5b34888](https://github.com/srobroek/harness-kit/commit/5b34888a3d087809f87116281442401ff4ece1be))
+
 ## [1.6.0](https://github.com/srobroek/harness-kit/compare/v1.5.0...v1.6.0) (2026-11-22)
 
 ### Features
