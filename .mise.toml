@@ -2,4 +2,4 @@
 # the workflows install it with actions/setup-node, which also wires up npm publishing.
 [tools]
 bun = "1.4.5"
-just = "1.58.0"
+just = "1.59.0"
