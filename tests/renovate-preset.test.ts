@@ -77,3 +77,107 @@ describe("renovate preset: Markdown managers", () => {
     expect(capture(packageVersions, line)).toEqual([])
   })
 })
+
+type Rule = {
+  matchUpdateTypes?: string[]
+  matchCurrentVersion?: string
+  matchPackageNames?: string[]
+  automerge?: boolean
+  enabled?: boolean
+  labels?: string[]
+  groupName?: string
+}
+const rules = preset.packageRules as Rule[]
+const ruleFor = (updateType: string, automerge: boolean) =>
+  rules.find((r) => r.matchUpdateTypes?.includes(updateType) && r.automerge === automerge)
+
+describe("renovate preset: automerge", () => {
+  test("Renovate merges itself, and only after the status checks pass", () => {
+    // platformAutomerge would merge without CI while no required-checks ruleset is active.
+    expect(preset).toMatchObject({ automerge: false, automergeType: "pr", platformAutomerge: false, ignoreTests: false, internalChecksFilter: "strict" })
+  })
+
+  test.each([
+    ["0.9.3", true],
+    ["v0.9.3", true],
+    ["0", true],
+    ["1.0.3", false],
+    ["v1.0.3", false],
+    ["10.2.0", false],
+  ])("patch updates automerge unless the current version %s is 0.x: skipped is %s", (version, zeroX) => {
+    const rule = ruleFor("patch", true)
+    expect(rule?.matchUpdateTypes).toEqual(["patch"])
+    // Renovate's "!/re/" form matches a version that does NOT match re.
+    const pattern = rule?.matchCurrentVersion
+    expect(pattern?.startsWith("!/")).toBe(true)
+    const re = new RegExp(pattern?.slice(2, -1) ?? "")
+    expect(re.test(version)).toBe(zeroX)
+  })
+
+  test("digest and pin updates automerge", () => {
+    expect(ruleFor("digest", true)?.matchUpdateTypes).toEqual(["digest", "pin", "pinDigest"])
+  })
+
+  test("minor updates are not automerged", () => {
+    expect(rules.filter((r) => r.matchUpdateTypes?.includes("minor") && r.automerge)).toEqual([])
+  })
+
+  test("a major update has its own labelled PR and never automerges", () => {
+    const rule = ruleFor("major", false)
+    expect(rule?.labels).toContain("major")
+    expect(rule?.groupName).toBeUndefined()
+  })
+
+  test("the last rule that sets automerge turns it off for the harness-kit packages and @opencode/*", () => {
+    const last = [...rules].reverse().find((r) => r.automerge !== undefined)
+    expect(last).toMatchObject({ automerge: false })
+    expect(last?.matchPackageNames).toEqual(["@srobroek/harness-kit", "srobroek/harness-kit", "@opencode/**"])
+  })
+
+  test("the host modules are disabled, so the host catalog sets their versions", () => {
+    const rule = rules.find((r) => r.enabled === false)
+    expect(rule?.matchPackageNames).toEqual(["@opentui/**", "solid-js"])
+  })
+
+  test("every security fix automerges once CI passes, majors included, and keeps its labels", () => {
+    // vulnerabilityAlerts is applied as a forced override that no packageRule can veto (Renovate: lib/config/utils.ts
+    // merges `config.force` last). That is the point: it also reaches major updates and the harness-kit and @opencode/* packages.
+    expect(preset.vulnerabilityAlerts).toMatchObject({ automerge: true, labels: ["dependencies", "security"] })
+  })
+
+  test("a security fix does not wait for the minimum release age that extends adds for npm", () => {
+    // The forced vulnerabilityAlerts override beats the packageRule that security:minimumReleaseAgeNpm adds.
+    expect(preset.extends).toContain("security:minimumReleaseAgeNpm")
+    expect(preset.vulnerabilityAlerts).toHaveProperty("minimumReleaseAge", null)
+  })
+})
+
+describe("renovate preset: the bun manager follows the npm rules", () => {
+  test("only the harness-kit group names managers, so every other rule covers bun and npm alike", () => {
+    const restricted = (preset.packageRules as (Rule & { matchManagers?: string[] })[]).filter((r) => r.matchManagers)
+    expect(restricted).toHaveLength(1)
+    expect(restricted[0]?.groupName).toBe("harness-kit")
+    expect(restricted[0]?.matchManagers).toEqual(expect.arrayContaining(["bun", "npm"]))
+  })
+
+  test("rule order: group, patch, digest, major, opencode group, disabled host modules, never-automerge last", () => {
+    const order = rules.map((r) =>
+      r.groupName === "harness-kit"
+        ? "harness-kit group"
+        : r.matchUpdateTypes?.includes("patch")
+          ? "patch"
+          : r.matchUpdateTypes?.includes("digest")
+            ? "digest"
+            : r.matchUpdateTypes?.includes("major")
+              ? "major"
+              : r.groupName === "opencode"
+                ? "opencode group"
+                : r.enabled === false
+                  ? "disabled"
+                  : r.automerge === false
+                    ? "never automerge"
+                    : "other",
+    )
+    expect(order).toEqual(["harness-kit group", "patch", "digest", "major", "opencode group", "disabled", "never automerge"])
+  })
+})
