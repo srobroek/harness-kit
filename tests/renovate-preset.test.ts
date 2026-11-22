@@ -139,9 +139,45 @@ describe("renovate preset: automerge", () => {
     expect(rule?.matchPackageNames).toEqual(["@opentui/**", "solid-js"])
   })
 
-  test("security fixes are labelled and, being patch or minor, not forced to automerge", () => {
-    // vulnerabilityAlerts is applied as a forced override that no packageRule can veto;
-    // setting automerge there would also automerge a major security fix.
-    expect(preset.vulnerabilityAlerts).toEqual({ labels: ["dependencies", "security"] })
+  test("every security fix automerges once CI passes, majors included, and keeps its labels", () => {
+    // vulnerabilityAlerts is applied as a forced override that no packageRule can veto (Renovate: lib/config/utils.ts
+    // merges `config.force` last). That is the point: it also reaches major updates and the harness-kit and @opencode/* packages.
+    expect(preset.vulnerabilityAlerts).toMatchObject({ automerge: true, labels: ["dependencies", "security"] })
+  })
+
+  test("a security fix does not wait for the minimum release age that extends adds for npm", () => {
+    // The forced vulnerabilityAlerts override beats the packageRule that security:minimumReleaseAgeNpm adds.
+    expect(preset.extends).toContain("security:minimumReleaseAgeNpm")
+    expect(preset.vulnerabilityAlerts).toHaveProperty("minimumReleaseAge", null)
+  })
+})
+
+describe("renovate preset: the bun manager follows the npm rules", () => {
+  test("only the harness-kit group names managers, so every other rule covers bun and npm alike", () => {
+    const restricted = (preset.packageRules as (Rule & { matchManagers?: string[] })[]).filter((r) => r.matchManagers)
+    expect(restricted).toHaveLength(1)
+    expect(restricted[0]?.groupName).toBe("harness-kit")
+    expect(restricted[0]?.matchManagers).toEqual(expect.arrayContaining(["bun", "npm"]))
+  })
+
+  test("rule order: group, patch, digest, major, opencode group, disabled host modules, never-automerge last", () => {
+    const order = rules.map((r) =>
+      r.groupName === "harness-kit"
+        ? "harness-kit group"
+        : r.matchUpdateTypes?.includes("patch")
+          ? "patch"
+          : r.matchUpdateTypes?.includes("digest")
+            ? "digest"
+            : r.matchUpdateTypes?.includes("major")
+              ? "major"
+              : r.groupName === "opencode"
+                ? "opencode group"
+                : r.enabled === false
+                  ? "disabled"
+                  : r.automerge === false
+                    ? "never automerge"
+                    : "other",
+    )
+    expect(order).toEqual(["harness-kit group", "patch", "digest", "major", "opencode group", "disabled", "never automerge"])
   })
 })
