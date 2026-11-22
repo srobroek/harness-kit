@@ -1,3 +1,9 @@
+## [1.6.0](https://github.com/srobroek/harness-kit/compare/v1.5.0...v1.6.0) (2026-11-22)
+
+### Features
+
+* pick bun or npm from the lockfile, add just recipes and mise pins ([327066d](https://github.com/srobroek/harness-kit/commit/327066d0fc62d2720f711bca884ab11142c5ef68))
+
 ## [1.5.0](https://github.com/srobroek/harness-kit/compare/v1.4.0...v1.5.0) (2026-11-21)
 
 ### Features
