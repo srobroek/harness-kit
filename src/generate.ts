@@ -766,7 +766,7 @@ function commonMcpServers(root: string, plugin: Plugin): McpServers | undefined 
 function ompMcpOutputs(root: string, plugin: Plugin, servers: McpServers): Output[] {
   return [{
     file: path.join(harnessDir(root, plugin, "omp"), "mcp.json"),
-    contents: json({ $schema: MCP_SCHEMA, mcpServers: mcpServersForOmp(servers) }),
+    contents: json({ $schema: MCP_SCHEMA, mcpServers: mcpServersForOmp(servers, plugin.name) }),
   }]
 }
 
@@ -891,7 +891,7 @@ function inventoryOf(root: string, plugin: Plugin, harness: Harness, generated: 
   if (harness === "omp") {
     const existing = pluginMcp === undefined ? readJsonFile(path.join(dir, "mcp.json")) : undefined
     if (isRecord(existing) && isRecord(existing.mcpServers)) mcp.push(...Object.keys(existing.mcpServers))
-    if (pluginMcp !== undefined) mcp.push(...Object.keys(mcpServersForOmp(pluginMcp)))
+    if (pluginMcp !== undefined) mcp.push(...Object.keys(mcpServersForOmp(pluginMcp, plugin.name)))
   }
   if (harness === "claude" && pluginMcp !== undefined) mcp.push(...Object.keys(mcpServersForClaude(pluginMcp)))
   if (harness === "pi" && files.includes("mcp-servers.ts") && pluginMcp) mcp.push(...Object.keys(Object.fromEntries(Object.entries(pluginMcp).filter(([, server]) => server.enabled !== false))))

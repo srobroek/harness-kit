@@ -32,10 +32,28 @@ export function mcpServersForClaude(servers: McpServers): McpServers {
   return staticallyEnabled(servers)
 }
 
-export function mcpServersForOmp(servers: McpServers): McpServers {
+function ompTransport(pluginName: string, serverName: string, server: McpServer): McpServer {
+  const type = server.type
+  const command = typeof server.command === "string" && server.command.length > 0
+  const url = typeof server.url === "string" && server.url.length > 0
+  if (type === undefined) {
+    if (command) return { ...server, type: "stdio" }
+    if (url) return { ...server, type: "streamable-http" }
+    throw new Error(`plugin "${pluginName}" MCP server "${serverName}" needs a command or url for OMP`)
+  }
+  if (type === "http") {
+    if (!url) throw new Error(`plugin "${pluginName}" MCP server "${serverName}" with type "http" needs a url for OMP`)
+    return { ...server, type: "streamable-http" }
+  }
+  if (type === "stdio" && command) return server
+  if ((type === "streamable-http" || type === "sse") && url) return server
+  throw new Error(`plugin "${pluginName}" MCP server "${serverName}" has unsupported OMP transport ${JSON.stringify(type)} or is missing its ${type === "stdio" ? "command" : "url"}`)
+}
+
+export function mcpServersForOmp(servers: McpServers, pluginName: string): McpServers {
   return Object.fromEntries(Object.entries(servers)
     .filter(([, server]) => server.enabled !== false && requiredEnvironment(server).length === 0)
-    .map(([name, server]) => [name, withoutAuthoringFields(server)]))
+    .map(([name, server]) => [name, ompTransport(pluginName, name, withoutAuthoringFields(server))]))
 }
 
 export function piMcpExtension(servers: McpServers): string {

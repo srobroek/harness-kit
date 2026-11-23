@@ -12,21 +12,31 @@ const servers: McpServers = {
   required: { command: "private-server", env: { API_KEY: "${API_KEY}" }, requiredEnv: ["API_KEY"] },
 }
 
+const transportServers: McpServers = {
+  commandDefault: { command: "stdio-server" },
+  streamable: { type: "http", url: "https://example.com/mcp" },
+  sse: { type: "sse", url: "https://example.com/events" },
+}
 const scratch: string[] = []
 afterEach(() => {
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
 describe("MCP output policies", () => {
-  test("preserves required placeholders for Claude but omits required servers from OMP", () => {
+  test("normalizes OMP transports and fails invalid declarations", () => {
     expect(mcpServersForClaude(servers)).toEqual({
       enabled: { command: "server" },
       keyless: { command: "context7" },
       required: { command: "private-server", env: { API_KEY: "${API_KEY}" } },
     })
-    expect(mcpServersForOmp(servers)).toEqual({ enabled: { command: "server" }, keyless: { command: "context7" } })
+    expect(mcpServersForOmp(servers, "fixture")).toEqual({ enabled: { command: "server", type: "stdio" }, keyless: { command: "context7", type: "stdio" } })
+    expect(mcpServersForOmp(transportServers, "fixture")).toEqual({
+      commandDefault: { command: "stdio-server", type: "stdio" },
+      streamable: { type: "streamable-http", url: "https://example.com/mcp" },
+      sse: { type: "sse", url: "https://example.com/events" },
+    })
+    expect(() => mcpServersForOmp({ invalid: {} }, "demo")).toThrow('plugin "demo" MCP server "invalid" needs a command or url')
   })
-
   test("executes the generated Pi extension with missing and present credentials", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "harness-kit-pi-mcp-"))
     scratch.push(dir)
