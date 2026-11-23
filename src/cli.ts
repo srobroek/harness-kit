@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// harness-kit: generate and check the files derived from plugins/<name>/, stamp release versions, validate Claude plugins.
+// harness-kit: generate and check the files derived from plugins/<name>/, stamp release versions, validate Claude and pi plugins.
 
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
@@ -10,6 +10,7 @@ import { drift, readPlugins, render, stampVersion, write } from "./generate"
 import { update } from "./update"
 import { workflowRefWarnings } from "./workflow-refs"
 import { validateClaude } from "./validate-claude"
+import { validatePi } from "./validate-pi"
 
 const USAGE = `usage: harness-kit <command> [options]
 
@@ -19,7 +20,10 @@ commands:
   update [--check]              move the pinned @srobroek/harness-kit to the newest release and rebuild;
                                 --check only reports (exit 1 when outdated). Never commits.
   validate-claude [--no-strict] run \`claude plugin validate\` on every Claude plugin and the marketplace
-  check                         build --check, then validate-claude; warns when a workflow tag and the package pin differ
+  validate-pi                   check every pi package without running pi: manifest paths, skills, extension syntax,
+                                agent front matter
+  check                         build --check, then validate-claude and validate-pi; warns when a workflow tag and the
+                                package pin differ
 
 options:
   --root <dir>   repository root (default: nearest directory at or above the cwd with ${CONFIG_FILE})
@@ -70,7 +74,7 @@ function packageVersion(): string {
   return manifest.version
 }
 
-/** Exit status: 0 success, 1 stale files or a rejected Claude plugin, 2 usage or configuration error. */
+/** Exit status: 0 success, 1 stale files or a rejected Claude or pi plugin, 2 usage or configuration error. */
 export function main(argv: string[]): number {
   try {
     const { values, positionals } = parseArgs({
@@ -95,7 +99,7 @@ export function main(argv: string[]): number {
       console.log(USAGE)
       return values.help ? 0 : 2
     }
-    const known = ["build", "stamp", "update", "validate-claude", "check"]
+    const known = ["build", "stamp", "update", "validate-claude", "validate-pi", "check"]
     if (!known.includes(command)) throw new Error(`unknown command "${command}" (use ${known.join(", ")})\n${USAGE}`)
     if (command !== "stamp" && rest.length > 0) throw new Error(`${command} takes no arguments, got "${rest.join(" ")}"`)
 
@@ -119,11 +123,14 @@ export function main(argv: string[]): number {
       }
       case "validate-claude":
         return validateClaude(root, config, { strict: values.strict === false ? false : undefined })
+      case "validate-pi":
+        return validatePi(root, config)
       default: {
         for (const warning of workflowRefWarnings(root)) console.warn(`warning: ${warning}`)
         const built = buildCheck(root, config)
         const validated = validateClaude(root, config, { strict: values.strict === false ? false : undefined })
-        return built || validated
+        const piValid = validatePi(root, config)
+        return built || validated || piValid
       }
     }
   } catch (error) {

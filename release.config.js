@@ -36,7 +36,7 @@ export function releaseConfig({ forge, branches = ["main"], assets, releaseRules
       [
         "@semantic-release/git",
         {
-          assets: assets ?? ["CHANGELOG.md", "package.json", "INVENTORY.md", "opencode/**", "claude/**", "omp/**"],
+          assets: assets ?? ["CHANGELOG.md", "package.json", "INVENTORY.md", "opencode/**", "claude/**", "omp/**", "pi/**"],
           message: "chore(release): ${nextRelease.gitTag} [skip ci]\n\n${nextRelease.notes}",
         },
       ],

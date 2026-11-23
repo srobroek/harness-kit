@@ -13,12 +13,13 @@ describe("resolveConfig defaults", () => {
   test("a minimal config enables all harnesses, skills and rules, eight kinds, and strict Claude validation", () => {
     expect(resolveConfig(minimal)).toEqual({
       marketplace: minimal.marketplace,
-      harnesses: ["opencode", "claude", "omp"],
+      harnesses: ["opencode", "claude", "omp", "pi"],
       commonDirs: ["skills", "rules"],
       kinds: ["skills", "agents", "commands", "rules", "hooks", "tools", "extensions", "mcp"],
       sharedDir: "shared",
       pluginKey: "agent-plugins",
       ompScope: "@agent-plugins",
+      piScope: "@agent-plugins",
       generatedBy: "harness-kit build",
       claude: { strict: true },
       omp: {},
@@ -26,8 +27,8 @@ describe("resolveConfig defaults", () => {
   })
 
   test("harnesses and kinds come back in canonical order whatever order the file lists them", () => {
-    const config = resolveConfig(with_({ harnesses: ["omp", "opencode"], kinds: ["mcp", "skills"] }))
-    expect(config.harnesses).toEqual(["opencode", "omp"])
+    const config = resolveConfig(with_({ harnesses: ["pi", "omp", "opencode"], kinds: ["mcp", "skills"] }))
+    expect(config.harnesses).toEqual(["opencode", "omp", "pi"])
     expect(config.kinds).toEqual(["skills", "mcp"])
   })
 })
@@ -51,6 +52,7 @@ describe("resolveConfig errors", () => {
     ["a sharedDir that is a commonDir", with_({ sharedDir: "rules" }), /"sharedDir" cannot be/],
     ["a duplicate commonDir", with_({ commonDirs: ["skills", "skills"] }), /twice/],
     ["an ompScope without @", with_({ ompScope: "mine" }), /"ompScope"/],
+    ["a piScope without @", with_({ piScope: "mine" }), /"piScope"/],
     ["a non-boolean claude.strict", with_({ claude: { strict: "yes" } }), /"claude.strict"/],
     ["an unknown claude key", with_({ claude: { lenient: true } }), /"claude.lenient"/],
     ["a claude.author without a name", with_({ claude: { author: {} } }), /"claude.author.name"/],

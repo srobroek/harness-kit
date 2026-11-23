@@ -8,7 +8,8 @@ Stack, toolchain versions, commands and approved departures: [docs/engineering.m
 
 - `src/config.ts`: harness-kit.json schema, defaults, validation.
 - `src/generate.ts`: reads `plugins/<name>/`, renders every generated file, detects drift.
-- `src/cli.ts`: the `harness-kit` command. `src/update.ts`, `src/validate-claude.ts`, `src/workflow-refs.ts` back its commands. `src/package-manager.ts` picks bun or npm for a consumer repo from its lockfile.
+- `src/cli.ts`: the `harness-kit` command. `src/update.ts`, `src/validate-claude.ts`, `src/validate-pi.ts`, `src/workflow-refs.ts` back its commands. `src/package-manager.ts` picks bun or npm for a consumer repo from its lockfile.
+- `src/pi.ts`: translates an agent file to pi-subagents front matter. `runtime/pi/rules.ts`: the rules loader that `build` vendors into a pi tree with rules.
 - Shared items: `resolveShared` in `src/generate.ts` resolves a plugin's `shared` list against `<sharedDir>/`; the copies are ordinary common files, so drift and stale removal reuse the `commonDirs` handling.
 - `src/runtime.ts`, `runtime/<harness>/`: the modules plugins vendor into `<harness>/_kit/`. `src/testing.ts`: the `@srobroek/harness-kit/testing` helpers.
 - `release.config.js`, `tsconfig.base.json`: presets that consumers extend. `default.json`: the Renovate preset.

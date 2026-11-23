@@ -5,6 +5,7 @@ import { loadPrompt, loadRules, loadSkills, renderTemplate, resolveOptions } fro
 import { isRecord, parseFrontmatter } from "../runtime/opencode/frontmatter.ts"
 import { createRootResolver, rootOf } from "../runtime/opencode/session.ts"
 import { agentDir, render, resolveOptions as resolveOmpOptions, templateExtension } from "../runtime/omp/template-extension.ts"
+import rulesExtension, { loadRules as loadPiRules, parseRule } from "../runtime/pi/rules.ts"
 import { cleanup, tempDir } from "./helpers"
 
 afterEach(cleanup)
@@ -152,5 +153,48 @@ describe("OMP template extension", () => {
     expect(agentDir({ PI_CODING_AGENT_DIR: " /x/agent " })).toBe("/x/agent")
     expect(agentDir({})).toMatch(/\.omp\/agent$/)
     expect(render("${user_config.a}${user_config.b}", { a: "1" })).toBe("1${user_config.b}")
+  })
+})
+
+describe("pi rules extension", () => {
+  const prompts = (root: string) => {
+    const handlers: Array<(event: { systemPrompt: string }) => { systemPrompt: string }> = []
+    rulesExtension({ on: (_event, handler) => void handlers.push(handler) }, { root })
+    return handlers.map((handler) => handler({ systemPrompt: "BASE" }).systemPrompt)
+  }
+
+  test("puts an alwaysApply rule in full and another rule as an index line with its absolute path", () => {
+    const root = tree({
+      "rules/b-on-demand.md": "---\ndescription: 'Read before touching the API.'\n---\nOn-demand body.\n",
+      "rules/a-always.md": "---\nalwaysApply: true\n---\n\nAlways keep the build green.\n",
+    })
+    const [prompt] = prompts(root)
+    expect(prompt).toBe(
+      [
+        "BASE",
+        "## Rule: a-always\n\nAlways keep the build green.",
+        `## Rules to read on demand\n\nRead a rule's file before work that its description covers.\n\n- b-on-demand: Read before touching the API. (${path.join(root, "rules", "b-on-demand.md")})`,
+      ].join("\n\n"),
+    )
+    expect(prompt).not.toContain("On-demand body.")
+  })
+
+  test("the text is deterministic: rules sort by file name, whatever order they were written in", () => {
+    const one = tree({ "rules/z.md": "---\nalwaysApply: true\n---\nZ\n", "rules/a.md": "---\nalwaysApply: true\n---\nA\n", "rules/sub/m.md": "---\nalwaysApply: true\n---\nM\n" })
+    const two = tree({ "rules/sub/m.md": "---\nalwaysApply: true\n---\nM\n", "rules/a.md": "---\nalwaysApply: true\n---\nA\n", "rules/z.md": "---\nalwaysApply: true\n---\nZ\n" })
+    const [first] = prompts(one)
+    expect(first).toBe("BASE\n\n## Rule: a\n\nA\n\n## Rule: sub/m\n\nM\n\n## Rule: z\n\nZ")
+    expect(prompts(two)).toEqual([first as string])
+    expect(prompts(one)).toEqual([first as string])
+  })
+
+  test("registers nothing without rules", () => {
+    expect(prompts(tree({ "skills/x/SKILL.md": "x" }))).toEqual([])
+    expect(loadPiRules("/nonexistent/rules")).toEqual([])
+  })
+
+  test("parseRule reads alwaysApply only when it is true, and a rule without front matter is on demand", () => {
+    expect(parseRule("r", "/r.md", "---\nalwaysApply: false\ndescription: \"x\"\n---\nBody\n")).toEqual({ name: "r", file: "/r.md", alwaysApply: false, description: "x", body: "Body" })
+    expect(parseRule("r", "/r.md", "Plain\n")).toEqual({ name: "r", file: "/r.md", alwaysApply: false, body: "Plain" })
   })
 })
