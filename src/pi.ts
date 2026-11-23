@@ -2,6 +2,7 @@
 // `allowedAgents`, ...) with the system prompt as the body, so harness-kit translates the agent file the plugin
 // ships to OMP into that shape. An `x.pi.md` variant is copied as is instead.
 
+import path from "node:path"
 import { fail, isRecord } from "./util"
 
 /** Source tool names (OMP, Claude Code and OpenCode spellings, lowercased) and the pi tools they stand for. */
@@ -56,6 +57,10 @@ export type PiAgentSource = {
  * verbatim, `tools` mapped to pi's tool names, and OMP `spawns` as `allowedAgents`. Dropped, and named in a
  * front-matter comment: `model` and the OpenCode model tier (pi-subagents takes the model from
  * `subagents.agentOverrides`), tools without a pi counterpart, and every other key.
+ *
+ * Throws when the source has no `tools` list: pi-subagents gives an agent without one every default tool, so an
+ * agent restricted only by OpenCode `permissions` would gain tools. A list whose tools all drop becomes `tools: ""`,
+ * which pi-subagents reads as an empty allowlist: the agent gets no tools.
  */
 export function piAgent(text: string, source: PiAgentSource): string {
   const match = FRONT_MATTER.exec(text)
@@ -75,19 +80,20 @@ export function piAgent(text: string, source: PiAgentSource): string {
   const name = ownName || source.name
   const description = typeof front.description === "string" ? front.description : undefined
   const tools = nameList(front.tools)
-  const piTools = tools && [...new Set(tools.flatMap((tool) => PI_TOOLS[tool.toLowerCase()] ?? []))]
-  const unmatched = (tools ?? []).filter((tool) => !(tool.toLowerCase() in PI_TOOLS))
+  if (!tools) {
+    const base = source.from.replace(/(?:\.omp)?\.md$/, "")
+    fail(
+      source.from,
+      `has no tools list for pi, and pi-subagents gives an agent without one every default tool. Add ${path.basename(base)}.pi.md, or an OMP variant ${path.basename(base)}.omp.md that lists tools`,
+    )
+  }
+  const piTools = [...new Set(tools.flatMap((tool) => PI_TOOLS[tool.toLowerCase()] ?? []))]
+  const unmatched = tools.filter((tool) => !(tool.toLowerCase() in PI_TOOLS))
   const spawns = nameList(front.spawns)
   const allowedAgents = spawns && !spawns.includes("*") ? spawns : undefined
   const role = modelRole(front)
   // `model` is reported on its own line; every other key the translation did not carry over is listed as dropped.
-  const carried = new Set([
-    "model",
-    ...(ownName ? ["name"] : []),
-    ...(description !== undefined ? ["description"] : []),
-    ...(tools ? ["tools"] : []),
-    ...(spawns ? ["spawns"] : []),
-  ])
+  const carried = new Set(["model", "tools", ...(ownName ? ["name"] : []), ...(description !== undefined ? ["description"] : []), ...(spawns ? ["spawns"] : [])])
   const dropped = Object.keys(front).filter((key) => !carried.has(key))
 
   const model = [
@@ -101,7 +107,7 @@ export function piAgent(text: string, source: PiAgentSource): string {
     ...(dropped.length > 0 ? [`# Keys pi-subagents does not read, dropped: ${dropped.join(", ")}`] : []),
     `name: ${scalar(name)}`,
     ...(description !== undefined ? [`description: ${JSON.stringify(description)}`] : []),
-    ...(piTools ? [`tools: ${piTools.length > 0 ? piTools.join(", ") : '""'}`] : []),
+    `tools: ${piTools.length > 0 ? piTools.join(", ") : '""'}`,
     ...(allowedAgents ? [`allowedAgents: ${allowedAgents.join(", ")}`] : []),
   ]
   return `---\n${lines.join("\n")}\n---\n${body}`

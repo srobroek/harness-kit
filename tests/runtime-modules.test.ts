@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { loadPrompt, loadRules, loadSkills, renderTemplate, resolveOptions } from "../runtime/opencode/content.ts"
 import { isRecord, parseFrontmatter } from "../runtime/opencode/frontmatter.ts"
 import { createRootResolver, rootOf } from "../runtime/opencode/session.ts"
 import { agentDir, render, resolveOptions as resolveOmpOptions, templateExtension } from "../runtime/omp/template-extension.ts"
-import rulesExtension, { loadRules as loadPiRules, parseRule } from "../runtime/pi/rules.ts"
-import { cleanup, tempDir } from "./helpers"
+import rulesExtension, { loadRules as loadPiRules, matchesToolCall, parseRule } from "../runtime/pi/rules.ts"
+import { cleanup, fakePi, tempDir } from "./helpers"
 
 afterEach(cleanup)
 
@@ -157,11 +157,12 @@ describe("OMP template extension", () => {
 })
 
 describe("pi rules extension", () => {
-  const prompts = (root: string) => {
-    const handlers: Array<(event: { systemPrompt: string }) => { systemPrompt: string }> = []
-    rulesExtension({ on: (_event, handler) => void handlers.push(handler) }, { root })
-    return handlers.map((handler) => handler({ systemPrompt: "BASE" }).systemPrompt)
+  const load = (root: string, warnings: string[] = []) => {
+    const pi = fakePi()
+    rulesExtension(pi.api, { root, warn: (text) => void warnings.push(text) })
+    return pi
   }
+  const prompts = (root: string) => load(root).emit("before_agent_start", { systemPrompt: "BASE" }).map((result) => result.systemPrompt)
 
   test("puts an alwaysApply rule in full and another rule as an index line with its absolute path", () => {
     const root = tree({
@@ -188,13 +189,159 @@ describe("pi rules extension", () => {
     expect(prompts(one)).toEqual([first as string])
   })
 
-  test("registers nothing without rules", () => {
-    expect(prompts(tree({ "skills/x/SKILL.md": "x" }))).toEqual([])
+  test("registers nothing without rules, and no trigger handlers without triggered rules", () => {
+    expect([...load(tree({ "skills/x/SKILL.md": "x" })).handlers.keys()]).toEqual([])
+    expect([...load(tree({ "rules/a.md": "---\ndescription: d\n---\nA\n" })).handlers.keys()]).toEqual(["before_agent_start"])
     expect(loadPiRules("/nonexistent/rules")).toEqual([])
   })
 
   test("parseRule reads alwaysApply only when it is true, and a rule without front matter is on demand", () => {
     expect(parseRule("r", "/r.md", "---\nalwaysApply: false\ndescription: \"x\"\n---\nBody\n")).toEqual({ name: "r", file: "/r.md", alwaysApply: false, description: "x", body: "Body" })
     expect(parseRule("r", "/r.md", "Plain\n")).toEqual({ name: "r", file: "/r.md", alwaysApply: false, body: "Plain" })
+  })
+})
+
+describe("pi rule triggers", () => {
+  const CORPUS = path.join(import.meta.dir, "fixtures", "pi-rules")
+  const corpus = Object.fromEntries(loadPiRules(CORPUS).map((rule) => [rule.name, rule]))
+  const rule = (front: string, body = "Rule body.") => parseRule("r", "/rules/r.md", `---\n${front}\n---\n${body}\n`)
+  const load = (files: Record<string, string>, warnings: string[] = []) => {
+    const root = tree(files)
+    const pi = fakePi()
+    rulesExtension(pi.api, { root, warn: (text) => void warnings.push(text) })
+    return pi
+  }
+  const bash = (command: string, id = command) => ({ toolName: "bash", toolCallId: id, input: { command } })
+
+  describe("matching", () => {
+    test("a bash condition matches the command; OMP's bd edit rule skips --help and keeps tool:bash but not tool:eval", () => {
+      const trigger = corpus["beads-no-editor"]?.trigger
+      if (!trigger) throw new Error("beads-no-editor has no trigger")
+      expect(trigger.tools).toEqual([{ tool: "bash" }])
+      expect(trigger.interrupt).toBe("always")
+      for (const command of ["bd edit bd-12", "EDITOR=true bd edit bd-12", "sudo bd -C /repo edit x"]) expect(matchesToolCall(trigger, "bash", { command }, "/w")).toBe(true)
+      for (const command of ["bd edit --help", "bd show bd-12", "echo bd edit"]) expect(matchesToolCall(trigger, "bash", { command }, "/w")).toBe(false)
+      expect(matchesToolCall(trigger, "edit", { path: "x", edits: [{ oldText: "", newText: "bd edit 1" }] }, "/w")).toBe(false)
+    })
+
+    test("a condition written for OMP's JSON arguments also matches, because bash calls are tested as their JSON too", () => {
+      const trigger = rule('condition: ["\\"command\\"\\\\s*:\\\\s*\\"git push --force"]\nscope: "tool:bash"').trigger
+      if (!trigger) throw new Error("no trigger")
+      expect(matchesToolCall(trigger, "bash", { command: "git push --force origin" }, "/w")).toBe(true)
+    })
+
+    test("an edit glob matches the path as given, absolute, relative to the cwd and by base name; the condition tests the new text", () => {
+      const trigger = rule('condition: ["as any"]\nscope: "tool:edit(**/extensions/*.ts), tool:write(*.md)"').trigger
+      if (!trigger) throw new Error("no trigger")
+      const edit = (file: string, newText = "x as any") => matchesToolCall(trigger, "edit", { path: file, edits: [{ oldText: "x", newText }] }, "/repo")
+      expect(edit("extensions/a.ts")).toBe(true)
+      expect(edit("/repo/pkg/extensions/a.ts")).toBe(true)
+      expect(edit("/elsewhere/extensions/a.ts")).toBe(true)
+      expect(edit("src/a.ts")).toBe(false)
+      expect(edit("extensions/a.ts", "x as unknown")).toBe(false)
+      expect(matchesToolCall(trigger, "write", { path: "/repo/docs/notes.md", content: "y as any" }, "/repo")).toBe(true)
+      expect(matchesToolCall(trigger, "read", { path: "extensions/a.ts" }, "/repo")).toBe(false)
+    })
+
+    test("a leading (?i) becomes the i flag", () => {
+      const trigger = rule('condition: "(?i)drop table"\nscope: tool:bash').trigger
+      if (!trigger) throw new Error("no trigger")
+      expect(matchesToolCall(trigger, "bash", { command: "psql -c 'DROP TABLE x'" }, "/w")).toBe(true)
+    })
+
+    test("the never-matching (?!) and a rule with only tools pi lacks stay index-only", () => {
+      expect(corpus["srobroek-package-investigate"]?.trigger).toBeUndefined()
+      expect(corpus["srobroek-package-investigate"]?.problem).toBeUndefined()
+      expect(rule('condition: ["x"]\nscope: "tool:eval"').trigger).toBeUndefined()
+      const pi = load({ "rules/never.md": readFileSync(path.join(CORPUS, "srobroek-package-investigate.md"), "utf8") })
+      expect([...pi.handlers.keys()]).toEqual(["before_agent_start"])
+      expect(pi.emit("before_agent_start", { systemPrompt: "" })[0].systemPrompt).toContain("- never: Before adding or changing a dependency")
+    })
+
+    test("an invalid regex skips the trigger, keeps the rule in the index, and warns once at load", () => {
+      expect(rule('condition: ["ok", "(unclosed"]\nscope: tool:bash').problem).toMatch(/^invalid condition "\(unclosed"/)
+      const warnings: string[] = []
+      const pi = load({ "rules/bad.md": '---\ndescription: Bad.\ncondition: ["(unclosed"]\nscope: "tool:bash"\ninterruptMode: always\n---\nBody\n' }, warnings)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain("bad.md: invalid condition")
+      expect(pi.handlers.has("tool_call")).toBe(false)
+      expect(pi.emit("before_agent_start", { systemPrompt: "" })[0].systemPrompt).toContain("- bad: Bad.")
+    })
+
+    test("no scope means text and every tool, not thinking", () => {
+      const trigger = rule('condition: "x"').trigger
+      expect({ text: trigger?.text, thinking: trigger?.thinking, tools: trigger?.tools.map((scope) => scope.tool) }).toEqual({ text: true, thinking: false, tools: ["bash", "edit", "write", "read"] })
+    })
+  })
+
+  describe("tool calls", () => {
+    const NO_FROB = '---\ndescription: No frobnicating.\ncondition: ["\\\\bfrobnicate-edit\\\\b"]\nscope: "tool:bash"\ninterruptMode: always\n---\nUse frobnicate-set.\n'
+    const NO_ZAP = '---\ndescription: No zapping.\ncondition: ["\\\\bzap\\\\b"]\nscope: "tool:bash"\ninterruptMode: always\n---\nDo not zap.\n'
+
+    test("interruptMode always blocks the first matching call with the rule; the identical retry and later matches of that rule run", () => {
+      const pi = load({ "rules/no-frob.md": NO_FROB, "rules/no-zap.md": NO_ZAP })
+      expect(pi.emit("tool_call", bash("ls"))).toEqual([undefined])
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "1"))).toEqual([
+        { block: true, reason: "This call was blocked before it ran, by the rule below.\n\n## Rule: no-frob\n\nUse frobnicate-set.\n\nRetry the call if it still applies." },
+      ])
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "2"))).toEqual([undefined])
+      expect(pi.emit("tool_call", bash("frobnicate-edit y", "3"))).toEqual([undefined])
+      expect(pi.emit("tool_call", bash("frobnicate-edit y && zap", "4"))[0].reason).toContain("## Rule: no-zap\n\nDo not zap.")
+    })
+
+    test("a new session starts the count again", () => {
+      const pi = load({ "rules/no-frob.md": NO_FROB })
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "1"))[0].block).toBe(true)
+      pi.emit("session_start", {})
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "2"))[0].block).toBe(true)
+    })
+
+    test("interruptMode never lets the call run and appends the rule to its result once per session", () => {
+      const pi = load({ "rules/hint.md": NO_FROB.replace("interruptMode: always", "interruptMode: never") })
+      const output = { type: "text", text: "done" }
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "1"))).toEqual([undefined])
+      expect(pi.emit("tool_result", { toolCallId: "1", content: [output] })).toEqual([
+        { content: [output, { type: "text", text: "This call matched the rule below.\n\n## Rule: hint\n\nUse frobnicate-set." }] },
+      ])
+      expect(pi.emit("tool_call", bash("frobnicate-edit y", "2"))).toEqual([undefined])
+      expect(pi.emit("tool_result", { toolCallId: "2", content: [output] })).toEqual([undefined])
+    })
+
+    test("a rule without interruptMode does not block", () => {
+      const pi = load({ "rules/hint.md": NO_FROB.replace("interruptMode: always\n", "") })
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "1"))).toEqual([undefined])
+      expect(pi.emit("tool_result", { toolCallId: "1", content: [], structuredContent: { kept: true } })[0]).toMatchObject({ structuredContent: { kept: true } })
+    })
+  })
+
+  describe("streamed text", () => {
+    const delta = (type: string, text: string, contentIndex = 0) => ({ assistantMessageEvent: { type, contentIndex, delta: text } })
+
+    test("a match across streamed deltas steers the rule in once per session, without aborting", () => {
+      const pi = load({ "rules/contention.md": readFileSync(path.join(CORPUS, "beads-contention-retry.md"), "utf8") })
+      pi.emit("message_start", { message: { role: "assistant" } })
+      pi.emit("message_update", delta("thinking_delta", "the store says lock busy: held by "))
+      expect(pi.sent).toEqual([])
+      pi.emit("message_update", delta("thinking_delta", "another process, so"))
+      expect(pi.sent).toHaveLength(1)
+      expect(pi.sent[0]?.options).toEqual({ deliverAs: "steer" })
+      expect(pi.sent[0]?.message).toMatchObject({ customType: "harness-kit-rule", display: true })
+      expect(pi.sent[0]?.message.content).toStartWith("Your reasoning matched the rule below.\n\n## Rule: contention\n\nThis is contention, not a failure.")
+      pi.emit("message_start", { message: { role: "assistant" } })
+      pi.emit("message_update", delta("text_delta", "lock busy: held by another process"))
+      expect(pi.sent).toHaveLength(1)
+    })
+
+    test("thinking is not watched unless the scope names it, and a new message starts a new buffer", () => {
+      const pi = load({ "rules/t.md": '---\ncondition: "secret word"\nscope: text\n---\nBody\n' })
+      pi.emit("message_start", { message: { role: "assistant" } })
+      pi.emit("message_update", delta("thinking_delta", "secret word"))
+      pi.emit("message_update", delta("text_delta", "secret "))
+      pi.emit("message_start", { message: { role: "assistant" } })
+      pi.emit("message_update", delta("text_delta", "word"))
+      expect(pi.sent).toEqual([])
+      pi.emit("message_update", { assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "the secret word" } })
+      expect(pi.sent).toHaveLength(1)
+    })
   })
 })
