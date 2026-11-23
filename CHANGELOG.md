@@ -1,3 +1,14 @@
+## [1.8.0](https://github.com/srobroek/harness-kit/compare/v1.7.0...v1.8.0) (2026-11-23)
+
+### Features
+
+* **pi:** add a pi harness target ([51bec54](https://github.com/srobroek/harness-kit/commit/51bec54f65dc21fd089c3e202640e4605602d32f))
+* **pi:** enforce OMP rule triggers and refuse agents without tools ([bd41712](https://github.com/srobroek/harness-kit/commit/bd41712ab0134255d1d4e5e796027dc7e2ba621e))
+
+### Bug Fixes
+
+* **pi:** treat a missing interruptMode as always, as OMP does ([3a7b373](https://github.com/srobroek/harness-kit/commit/3a7b373c5d2cfad6a1e654a617f94ac040f90cb0))
+
 ## [1.7.0](https://github.com/srobroek/harness-kit/compare/v1.6.0...v1.7.0) (2026-11-22)
 
 ### Features
