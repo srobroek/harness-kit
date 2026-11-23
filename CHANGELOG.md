@@ -1,3 +1,17 @@
+## [1.9.0](https://github.com/srobroek/harness-kit/compare/v1.8.0...v1.9.0) (2026-11-23)
+
+### Features
+
+* **pi:** declare companion pi packages and check that they are installed ([be9760a](https://github.com/srobroek/harness-kit/commit/be9760ab863ef17bd0a3e7f118ba83b49b270240))
+* **pi:** list npm prerequisites as dependencies of published pi packages ([2d40f61](https://github.com/srobroek/harness-kit/commit/2d40f615f541c5e34e3eb92bca599e1015464844))
+* **pi:** name pi packages with piPrefix and a per-plugin piName ([505ca1c](https://github.com/srobroek/harness-kit/commit/505ca1c9caa242ac7424eab36191b0e019d16b04))
+* **pi:** publish pi packages to npm through trusted publishing ([a9677d2](https://github.com/srobroek/harness-kit/commit/a9677d24567ab5f722fda9c683ac224c86f16cf9))
+* **prerequisites:** declare the CLIs a plugin needs and check them in pi and OMP ([171a19c](https://github.com/srobroek/harness-kit/commit/171a19c241ef299add0b540a0c5982f6e17f03d0))
+
+### Bug Fixes
+
+* **pi:** give a manifest without resource keys an empty extensions list ([f43349b](https://github.com/srobroek/harness-kit/commit/f43349b647485a3d3afd10c8a15b2a95cd7b2078))
+
 ## [1.8.0](https://github.com/srobroek/harness-kit/compare/v1.7.0...v1.8.0) (2026-11-23)
 
 ### Features
