@@ -35,6 +35,8 @@ describe("MCP output policies", () => {
     writeFileSync(source, piMcpExtension(servers))
     const compile = Bun.spawnSync([process.execPath, "build", source, "--outfile", module])
     expect(compile.exitCode).toBe(0)
+    const typecheck = Bun.spawnSync([process.execPath, "x", "tsc", "--noEmit", "--strict", "--target", "ES2023", "--module", "ESNext", "--moduleResolution", "bundler", source])
+    expect(typecheck.exitCode).toBe(0)
     const { default: register } = await import(`${pathToFileURL(module).href}?${Date.now()}`)
     const previousKey = process.env.API_KEY
     const previousContext7 = process.env.CONTEXT7_API_KEY
@@ -53,6 +55,11 @@ describe("MCP output policies", () => {
       expect(withCredentials.map(([name]) => name)).toEqual(["enabled", "keyless", "required"])
       expect(withCredentials.find(([name]) => name === "keyless")?.[1]).toEqual({ command: "context7", headers: { CONTEXT7_API_KEY: "context7-secret" } })
       expect(withCredentials.find(([name]) => name === "required")?.[1]).toEqual({ command: "private-server", env: { API_KEY: "private-secret" } })
+
+      delete process.env.CONTEXT7_API_KEY
+      const afterUnset: Array<[string, Record<string, unknown>]> = []
+      register({ registerMcpServer: (name: string, config: Record<string, unknown>) => afterUnset.push([name, config]) })
+      expect(afterUnset.find(([name]) => name === "keyless")?.[1]).toEqual({ command: "context7" })
     } finally {
       if (previousKey === undefined) delete process.env.API_KEY
       else process.env.API_KEY = previousKey
