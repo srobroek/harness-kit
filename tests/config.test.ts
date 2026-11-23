@@ -20,9 +20,11 @@ describe("resolveConfig defaults", () => {
       pluginKey: "agent-plugins",
       ompScope: "@agent-plugins",
       piScope: "@agent-plugins",
+      piPrefix: "",
       generatedBy: "harness-kit build",
       claude: { strict: true },
       omp: {},
+      pi: { publish: false },
     })
   })
 
@@ -53,6 +55,10 @@ describe("resolveConfig errors", () => {
     ["a duplicate commonDir", with_({ commonDirs: ["skills", "skills"] }), /twice/],
     ["an ompScope without @", with_({ ompScope: "mine" }), /"ompScope"/],
     ["a piScope without @", with_({ piScope: "mine" }), /"piScope"/],
+    ["a piPrefix with capitals", with_({ piPrefix: "Pi-" }), /"piPrefix" must be lowercase/],
+    ["a piPrefix with a scope", with_({ piPrefix: "@srobroek/pi-" }), /"piPrefix" must be lowercase/],
+    ["a piPrefix that starts with a hyphen", with_({ piPrefix: "-pi" }), /"piPrefix" must be lowercase/],
+    ["a piPrefix that is not a string", with_({ piPrefix: 3 }), /"piPrefix" must be lowercase/],
     ["a non-boolean claude.strict", with_({ claude: { strict: "yes" } }), /"claude.strict"/],
     ["an unknown claude key", with_({ claude: { lenient: true } }), /"claude.lenient"/],
     ["a claude.author without a name", with_({ claude: { author: {} } }), /"claude.author.name"/],

@@ -27,6 +27,15 @@ export const RUNTIME_MODULES = {
 export type RuntimeModuleName = keyof typeof RUNTIME_MODULES
 export const RUNTIME_MODULE_NAMES = Object.keys(RUNTIME_MODULES) as RuntimeModuleName[]
 
+/**
+ * The prerequisite check, `runtime/pi/prereqs.ts`. It is not opted into with `runtime`: declaring `prerequisites`
+ * vendors it into the plugin's pi and OMP trees. Both harnesses share the extension API it uses, so one source serves
+ * both. The plugin's list goes next to it as `PREREQS_DATA`.
+ */
+export const PREREQS_MODULE = "prereqs.ts"
+export const PREREQS_DATA = "prereqs.json"
+export const PREREQS_HARNESSES: readonly Harness[] = ["omp", "pi"]
+
 const SOURCE_ROOT = path.join(import.meta.dir, "..", "runtime")
 
 /**

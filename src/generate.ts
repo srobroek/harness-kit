@@ -4,9 +4,32 @@
 
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind } from "./config"
+import { installHint } from "../runtime/pi/prereqs"
+import {
+  type Companion,
+  type Config,
+  type Harness,
+  KNOWN_HARNESSES,
+  KNOWN_KINDS,
+  type Kind,
+  NPM_NAME,
+  NPM_NAME_MAX,
+  npmSpec,
+  type Prerequisite,
+  readCompanions,
+  readPrerequisites,
+} from "./config"
 import { piAgent } from "./pi"
-import { RUNTIME_DIR, type RuntimeModuleName, resolveRuntime, vendoredFile, vendoredSource } from "./runtime"
+import {
+  PREREQS_DATA,
+  PREREQS_HARNESSES,
+  PREREQS_MODULE,
+  RUNTIME_DIR,
+  type RuntimeModuleName,
+  resolveRuntime,
+  vendoredFile,
+  vendoredSource,
+} from "./runtime"
 import { fail, httpUrl, isRecord, json, nonEmptyString } from "./util"
 
 export type { Harness, Kind }
@@ -32,6 +55,8 @@ export type Plugin = {
   options?: Record<string, PluginOption>
   /** Name of the Claude plugin when it differs from the directory name; it sets the `/<name>:<command>` namespace. */
   claudeName?: string
+  /** The pi package name without its scope, when it is not `piPrefix` + the plugin name. */
+  piName?: string
   /** Author and license go into the Claude manifest, which strict validation requires. */
   author?: { name: string; url?: string }
   license?: string
@@ -43,6 +68,10 @@ export type Plugin = {
   shared?: string[]
   /** Runtime modules vendored into the harness trees as `_kit/`, with their dependencies. Absent when the plugin opts out. */
   runtime?: RuntimeModuleName[]
+  /** External CLIs the plugin needs. The pi and OMP trees get a check that reports the missing ones. */
+  prerequisites?: Prerequisite[]
+  /** pi packages the plugin works with. The pi tree's README, manifest and prerequisite check name them. */
+  companions?: Companion[]
 }
 
 /** `executable` is set on copies of source files: the output must carry the source's executable bit. Unset leaves the mode alone. */
@@ -130,6 +159,13 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     claudeName = nonEmptyString(where, `${key}.claudeName`, own.claudeName)
     if (!NAME_PATTERN.test(claudeName)) fail(where, `"${key}.claudeName" must be kebab-case`)
   }
+  let piName: string | undefined
+  if (own.piName !== undefined) {
+    piName = nonEmptyString(where, `${key}.piName`, own.piName)
+    if (!NPM_NAME.test(piName)) {
+      fail(where, `"${key}.piName" must be an npm package name without a scope (the scope is "piScope"): lowercase letters, digits, ".", "_" or "-", starting with a letter or digit, got ${JSON.stringify(piName)}`)
+    }
+  }
   let author: { name: string; url?: string } | undefined
   if (manifest.author !== undefined) {
     const raw = manifest.author
@@ -147,6 +183,8 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
   const selectedHarnesses = KNOWN_HARNESSES.filter((h) => harnesses.includes(h))
   const runtime = readRuntime(where, key, own.runtime, selectedHarnesses)
   const shared = readShared(where, key, own.shared, config)
+  const prerequisites = readPrerequisites(where, `${key}.prerequisites`, own.prerequisites)
+  const companions = readCompanions(where, `${key}.companions`, own.companions)
   // Keep canonical harness order so output does not depend on how the author ordered the list.
   return {
     name,
@@ -158,12 +196,15 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     discrepancies,
     options,
     claudeName,
+    piName,
     author,
     license,
     claude,
     userConfig,
     shared,
     runtime,
+    prerequisites,
+    companions,
   }
 }
 
@@ -280,13 +321,44 @@ function checkOpencodeEntries(root: string, plugin: Plugin): void {
   }
 }
 
+/** The name of a plugin's pi package: `<piScope>/<piName>`, or `<piScope>/<piPrefix><plugin name>` without `piName`. */
+export function piPackageName(plugin: Pick<Plugin, "name" | "piName">, config: Pick<Config, "piScope" | "piPrefix">): string {
+  return `${config.piScope}/${plugin.piName ?? `${config.piPrefix}${plugin.name}`}`
+}
+
+/** Every pi package name fits npm's length limit and belongs to one plugin. */
+function checkPiNames(plugins: readonly Plugin[], config: Config): void {
+  const owners = new Map<string, string>()
+  for (const plugin of plugins.filter((item) => item.harnesses.includes("pi") || item.piName !== undefined)) {
+    const where = `plugins/${plugin.name}/package.json`
+    const name = piPackageName(plugin, config)
+    if (name.length > NPM_NAME_MAX) fail(where, `pi package name "${name}" is longer than npm's ${NPM_NAME_MAX} characters`)
+    const owner = owners.get(name)
+    if (owner !== undefined) fail(where, `pi package name "${name}" is also the name of plugin "${owner}"; set a different "${config.pluginKey}.piName"`)
+    owners.set(name, plugin.name)
+  }
+}
+
 export function readPlugins(root: string, config: Config): Plugin[] {
   const plugins = listDirs(path.join(root, "plugins")).map((name) => readPlugin(root, name, config))
   for (const plugin of plugins) {
     checkOpencodeEntries(root, plugin)
     resolveShared(root, plugin, config)
   }
+  checkPiNames(plugins, config)
+  checkCompanions(plugins, config)
   return plugins
+}
+
+/** A companion is another package: not the plugin's own pi package, and not one that pi itself supplies. */
+function checkCompanions(plugins: readonly Plugin[], config: Config): void {
+  for (const plugin of plugins) {
+    const where = `plugins/${plugin.name}/package.json`
+    for (const companion of plugin.companions ?? []) {
+      if (PI_HOST_PACKAGES.includes(companion.package)) fail(where, `companion "${companion.package}" is supplied by pi itself; list only pi packages that are installed on their own`)
+      if (companion.package === piPackageName(plugin, config)) fail(where, `companion "${companion.package}" is this plugin's own pi package`)
+    }
+  }
 }
 
 const pluginDir = (root: string, plugin: Plugin) => path.join(root, "plugins", plugin.name)
@@ -430,6 +502,147 @@ function piRulesLoader(root: string, plugin: Plugin, copies: readonly Output[], 
   return [{ file: path.join(harnessDir(root, plugin, "pi"), RUNTIME_DIR, PI_RULES_LOADER), contents: vendoredFile("pi", PI_RULES_LOADER, config.generatedBy) }]
 }
 
+/** The contents of a tree's `_kit/prereqs.json`, which the vendored check reads. Only the pi tree's list has the companions. */
+export function prerequisiteData(plugin: Pick<Plugin, "name" | "prerequisites" | "companions">, harness: Harness): { plugin: string; prerequisites: Prerequisite[]; companions?: Companion[] } {
+  return { plugin: plugin.name, prerequisites: plugin.prerequisites ?? [], ...(harness === "pi" && plugin.companions ? { companions: plugin.companions } : {}) }
+}
+
+/** Whether a tree gets the check: for prerequisites in the pi and OMP trees, and for companions in the pi tree. */
+export const hasPrerequisiteCheck = (plugin: Pick<Plugin, "prerequisites" | "companions">, harness: Harness): boolean =>
+  PREREQS_HARNESSES.includes(harness) && (plugin.prerequisites !== undefined || (harness === "pi" && plugin.companions !== undefined))
+
+/** The prerequisite check and the plugin's list, in each tree that gets the check. */
+function prerequisiteFiles(root: string, plugin: Plugin, config: Config): Output[] {
+  return plugin.harnesses.filter((harness) => hasPrerequisiteCheck(plugin, harness)).flatMap((harness) => [
+    { file: path.join(harnessDir(root, plugin, harness), RUNTIME_DIR, PREREQS_MODULE), contents: vendoredFile("pi", PREREQS_MODULE, config.generatedBy) },
+    { file: path.join(harnessDir(root, plugin, harness), RUNTIME_DIR, PREREQS_DATA), contents: json(prerequisiteData(plugin, harness)) },
+  ])
+}
+
+/** `./_kit/prereqs.ts` when this build vendors it into the tree; `files` are relative to the tree. */
+const prereqsEntry = (files: readonly string[]) => (files.includes(`${RUNTIME_DIR}/${PREREQS_MODULE}`) ? [`./${RUNTIME_DIR}/${PREREQS_MODULE}`] : [])
+
+/** Files a published pi tree takes from the plugin (changelog) and the repo (licence), copied byte for byte. */
+const PUBLISH_COPIES = [
+  ["CHANGELOG.md", "plugin"],
+  ["LICENSE", "repo"],
+] as const
+
+/** Whether the pi tree gets a README.md: a published one does, and so does one whose plugin names companions. */
+const hasPiReadme = (plugin: Plugin, config: Config) => config.pi.publish || plugin.companions !== undefined
+
+/** Root files of a harness tree that the build owns: the pi README and the copies a published pi tree takes. */
+function ownedRootFiles(plugin: Plugin, harness: Harness, config: Config): string[] {
+  if (harness !== "pi") return []
+  return [...(hasPiReadme(plugin, config) ? ["README.md"] : []), ...(config.pi.publish ? PUBLISH_COPIES.map(([file]) => file) : [])]
+}
+
+/** The "Works with" section of the pi README: each companion, what it is for, and how to install it. */
+function worksWith(companions: readonly Companion[]): string {
+  const cellText = (text: string) => text.replaceAll("|", "\\|")
+  const rows = companions.map((item) => `| \`${item.package}\` | ${item.required ? "yes" : "no"} | ${cellText(item.for)} | \`pi install npm:${item.package}\` |`)
+  return ["## Works with", "", "This package works with these pi packages. Install them next to it.", "", "| Package | Required | For | Install |", "| --- | --- | --- | --- |", ...rows, ""].join("\n")
+}
+
+/**
+ * The pi tree's README.md: the plugin's own README.md, byte for byte, then the "Works with" section when it names
+ * companions. A plugin without a README.md gets a heading and its description in front of the section.
+ */
+function piReadme(root: string, plugin: Plugin, config: Config): string | Buffer | undefined {
+  const source = path.join(pluginDir(root, plugin), "README.md")
+  const own = existsSync(source) ? readFileSync(source) : undefined
+  if (!plugin.companions) return own
+  const head = own ? own.toString("utf8").replace(/\s*$/, "\n") : `# ${piPackageName(plugin, config)}\n\n${plugin.description}\n`
+  return `${head}\n${worksWith(plugin.companions)}`
+}
+
+function piRootCopies(root: string, plugin: Plugin, config: Config): Output[] {
+  if (!plugin.harnesses.includes("pi")) return []
+  const tree = harnessDir(root, plugin, "pi")
+  const readme = hasPiReadme(plugin, config) ? piReadme(root, plugin, config) : undefined
+  const copies = config.pi.publish
+    ? PUBLISH_COPIES.flatMap(([file, from]) => {
+        const source = path.join(from === "plugin" ? pluginDir(root, plugin) : root, file)
+        return existsSync(source) ? [{ file: path.join(tree, file), contents: readFileSync(source) }] : []
+      })
+    : []
+  return [...(readme !== undefined ? [{ file: path.join(tree, "README.md"), contents: readme }] : []), ...copies]
+}
+
+/** What a published pi package takes from the repo's root package.json. */
+type PublishSettings = { license?: string; repository: string; homepage?: unknown; bugs?: unknown }
+
+const GITHUB_SHORTHAND = /^(?:github:)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/
+
+/** The root package.json fields every published pi package carries. npm provenance checks `repository` against the publishing repo. */
+function readPublishSettings(root: string): PublishSettings {
+  const where = "package.json"
+  const file = path.join(root, "package.json")
+  if (!existsSync(file)) fail(where, 'missing; "pi.publish" takes "repository" from the root package.json')
+  const manifest = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+  const raw = isRecord(manifest.repository) ? manifest.repository.url : manifest.repository
+  if (raw === undefined) fail(where, '"repository" is required when "pi.publish" is on, because npm provenance checks it against the repository that publishes')
+  const given = nonEmptyString(where, "repository", raw)
+  const shorthand = GITHUB_SHORTHAND.exec(given)
+  const repository = shorthand ? `git+https://github.com/${shorthand[1]}/${shorthand[2]}.git` : given
+  if (!/^(?:git\+)?https:\/\//.test(repository)) fail(where, `"repository" must be a GitHub shorthand ("owner/repo") or an https URL, got ${JSON.stringify(given)}`)
+  const license = manifest.license === undefined ? undefined : nonEmptyString(where, "license", manifest.license)
+  return { license, repository, homepage: manifest.homepage, bugs: manifest.bugs }
+}
+
+/** Packages pi supplies to extensions. A published package lists the ones it imports as peers, never as dependencies. */
+const PI_HOST_PACKAGES = ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"]
+
+const packageOf = (specifier: string) => specifier.split("/").slice(0, specifier.startsWith("@") ? 2 : 1).join("/")
+
+/** `dependencies` of a published pi package: the npm package and range of each `install.npm` prerequisite, by name. */
+function prerequisiteDependencies(plugin: Plugin): Record<string, string> {
+  const where = `plugins/${plugin.name}/package.json`
+  const found = new Map<string, string>()
+  for (const { install } of plugin.prerequisites ?? []) {
+    const spec = install.npm === undefined ? undefined : npmSpec(install.npm)
+    if (!spec) continue
+    if (PI_HOST_PACKAGES.includes(spec.name)) fail(where, `prerequisite package "${spec.name}" is supplied by pi, so a published package must not list it in "dependencies"`)
+    const other = found.get(spec.name)
+    if (other !== undefined && other !== spec.range) fail(where, `prerequisites give "${spec.name}" two ranges, "${other}" and "${spec.range}"; "dependencies" takes one`)
+    found.set(spec.name, spec.range)
+  }
+  return Object.fromEntries([...found].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+}
+
+/**
+ * The npm fields of a published pi package. `files` lists every top-level entry the tree ships, so nothing else is
+ * packed: not package.json (npm always packs it), node_modules or a dot-entry such as `.DS_Store`. `own` are the tree's
+ * hand-authored files, which are scanned for imports of the host packages. An npm prerequisite becomes a dependency,
+ * so installing the package puts its bin in `node_modules/.bin`, where the prerequisite check looks first.
+ */
+function publishFields(root: string, plugin: Plugin, publish: PublishSettings, files: readonly string[], own: readonly string[]): Record<string, unknown> {
+  const license = plugin.license ?? publish.license
+  if (license === undefined) fail(`plugins/${plugin.name}/package.json`, '"license" is required when "pi.publish" is on; set it here or in the root package.json')
+  const dir = harnessDir(root, plugin, "pi")
+  const imported = new Set(
+    own.filter((file) => MODULE_EXTENSION.test(file) && !file.startsWith("node_modules/")).flatMap((file) => bareImports(readFileSync(path.join(dir, file), "utf8")).map(packageOf)),
+  )
+  const companions = plugin.companions ?? []
+  const peers = [...PI_HOST_PACKAGES.filter((name) => imported.has(name)).map((name): [string, string] => [name, "*"]), ...companions.map((item): [string, string] => [item.package, item.range ?? "*"])]
+  peers.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  const shipped = [...new Set(files.map((file) => file.split("/")[0] as string))].filter((entry) => entry !== "package.json" && entry !== "node_modules" && !entry.startsWith("."))
+  const dependencies = prerequisiteDependencies(plugin)
+  return {
+    license,
+    repository: { type: "git", url: publish.repository, directory: `plugins/${plugin.name}/pi` },
+    ...(publish.homepage !== undefined ? { homepage: publish.homepage } : {}),
+    ...(publish.bugs !== undefined ? { bugs: publish.bugs } : {}),
+    files: shipped.sort(),
+    publishConfig: { access: "public", provenance: true },
+    ...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
+    ...(peers.length > 0 ? { peerDependencies: Object.fromEntries(peers) } : {}),
+    ...(companions.length > 0
+      ? { peerDependenciesMeta: Object.fromEntries([...companions].sort((a, b) => (a.package < b.package ? -1 : 1)).map((item) => [item.package, { optional: true }])) }
+      : {}),
+  }
+}
+
 function ompExtensions(root: string, plugin: Plugin): string[] {
   const dir = path.join(harnessDir(root, plugin, "omp"), "extensions")
   if (!existsSync(dir)) return []
@@ -445,27 +658,38 @@ function generatedIn(root: string, plugin: Plugin, harness: Harness, outputs: re
   return outputs.filter((output) => output.file.startsWith(prefix)).map((output) => output.file.slice(prefix.length).split(path.sep).join("/"))
 }
 
-/** What a harness tree holds after this build: its hand-authored files outside the generated directories, plus `generated`. */
-function treeFiles(root: string, plugin: Plugin, harness: Harness, generated: string[], config: Config): string[] {
+/** The hand-authored files of a harness tree: everything outside the directories and root files the build owns. */
+function ownFiles(root: string, plugin: Plugin, harness: Harness, config: Config): string[] {
   const owned = [...config.commonDirs, RUNTIME_DIR]
-  const own = listFiles(harnessDir(root, plugin, harness)).filter((file) => !owned.some((dir) => file.startsWith(`${dir}/`)))
-  return [...new Set([...own, ...generated])].sort()
+  const ownedRoot = ownedRootFiles(plugin, harness, config)
+  return listFiles(harnessDir(root, plugin, harness)).filter((file) => !owned.some((dir) => file.startsWith(`${dir}/`)) && !ownedRoot.includes(file))
+}
+
+/** What a harness tree holds after this build: its hand-authored files, plus `generated`. */
+function treeFiles(root: string, plugin: Plugin, harness: Harness, generated: string[], config: Config): string[] {
+  return [...new Set([...ownFiles(root, plugin, harness, config), ...generated])].sort()
 }
 
 /**
  * The `pi` key of the pi package.json: only the resources the tree ships. An explicit manifest turns off pi's
  * conventional directories, so commands are listed as prompts and agents under pi-subagents' `subagents.agents`.
+ * pi loads a package whose manifest lists none of `extensions`, `skills`, `prompts` and `themes` as one extension at
+ * the package root, which fails to start (pi 1.6.0). Such a manifest, as for a package of agents only, gets
+ * `extensions: []`.
  */
 function piResources(files: readonly string[]): Record<string, unknown> {
   const extensions = [
     ...files.filter((file) => /^extensions\/[^/]+$/.test(file) && MODULE_EXTENSION.test(file)),
     ...files.filter((file) => file === `${RUNTIME_DIR}/${PI_RULES_LOADER}`),
   ].map((file) => `./${file}`)
+  extensions.push(...prereqsEntry(files))
   const has = (accept: (file: string) => boolean) => files.some(accept)
+  const skills = has((file) => /^skills\/.+\/SKILL\.md$/.test(file))
+  const prompts = has((file) => /^commands\/[^/]+\.md$/.test(file))
   return {
-    ...(extensions.length > 0 ? { extensions } : {}),
-    ...(has((file) => /^skills\/.+\/SKILL\.md$/.test(file)) ? { skills: ["./skills"] } : {}),
-    ...(has((file) => /^commands\/[^/]+\.md$/.test(file)) ? { prompts: ["./commands"] } : {}),
+    ...(extensions.length > 0 || (!skills && !prompts) ? { extensions } : {}),
+    ...(skills ? { skills: ["./skills"] } : {}),
+    ...(prompts ? { prompts: ["./commands"] } : {}),
     ...(has((file) => file.startsWith("agents/") && isPiAgent(file)) ? { subagents: { agents: ["./agents"] } } : {}),
   }
 }
@@ -512,10 +736,11 @@ function claudeLinks(plugin: Plugin, config: Config): { homepage?: string; repos
   }
 }
 
-function manifests(root: string, plugin: Plugin, config: Config, copies: readonly Output[]): Output[] {
+function manifests(root: string, plugin: Plugin, config: Config, copies: readonly Output[], publish?: PublishSettings): Output[] {
   const { name, version, description, category } = plugin
   const outputs: Output[] = []
   const at = (harness: Harness, file: string) => path.join(harnessDir(root, plugin, harness), file)
+  const ompEntries = plugin.harnesses.includes("omp") ? [...ompExtensions(root, plugin), ...prereqsEntry(generatedIn(root, plugin, "omp", copies))] : []
   if (plugin.harnesses.includes("claude")) {
     const author = plugin.author ?? config.claude.author
     const { homepage, repository } = claudeLinks(plugin, config)
@@ -545,7 +770,7 @@ function manifests(root: string, plugin: Plugin, config: Config, copies: readonl
         description,
         private: true,
         ...(config.omp.packageType ? { type: config.omp.packageType } : {}),
-        omp: ompExtensions(root, plugin).length > 0 ? { extensions: ompExtensions(root, plugin) } : {},
+        omp: ompEntries.length > 0 ? { extensions: ompEntries } : {},
       }),
     })
     outputs.push({ file: at("omp", ".omp-plugin/plugin.json"), contents: json({ name, description, version, category }) })
@@ -566,9 +791,10 @@ function manifests(root: string, plugin: Plugin, config: Config, copies: readonl
   }
   if (plugin.harnesses.includes("pi")) {
     const files = treeFiles(root, plugin, "pi", generatedIn(root, plugin, "pi", copies), config)
+    const npm = publish ? publishFields(root, plugin, publish, files, ownFiles(root, plugin, "pi", config)) : {}
     outputs.push({
       file: at("pi", "package.json"),
-      contents: json({ name: `${config.piScope}/${name}`, version, description, keywords: ["pi-package"], pi: piResources(files) }),
+      contents: json({ name: piPackageName(plugin, config), version, description, keywords: ["pi-package"], ...npm, pi: piResources(files) }),
     })
   }
   return outputs
@@ -641,12 +867,22 @@ function buildInventory(root: string, plugin: Plugin, copies: Output[], config: 
 }
 
 const cell = (names: string[]) => (names.length > 0 ? names.join(", ") : "-")
+const tableText = (text: string) => text.replaceAll("|", "\\|")
+
+/** The plugin's prerequisites as a Markdown section; empty when it declares none. Every harness needs them, so they have no column. */
+function prerequisitesMarkdown(prerequisites: readonly Prerequisite[] | undefined): string[] {
+  if (!prerequisites) return []
+  const rows = prerequisites.map((item) =>
+    [item.bin, item.required ? "yes" : "no", item.version ?? "any", item.for, installHint(item.install)].map(tableText).join(" | "),
+  )
+  return ["", "## Prerequisites", "", "| Tool | Required | Version | For | Install |", "| --- | --- | --- | --- | --- |", ...rows.map((row) => `| ${row} |`)]
+}
 
 function pluginInventoryMarkdown(entry: PluginInventory, config: Config): string {
   const header = `| Kind | ${entry.harnesses.join(" | ")} |`
   const divider = `| --- |${entry.harnesses.map(() => " --- |").join("")}`
   const rows = config.kinds.map((kind) => `| ${kind} | ${entry.harnesses.map((h) => cell(entry.contents[h]![kind])).join(" | ")} |`)
-  return [generatedNote(config), `# ${entry.name}`, "", entry.description, "", header, divider, ...rows, ""].join("\n")
+  return [generatedNote(config), `# ${entry.name}`, "", entry.description, "", header, divider, ...rows, ...prerequisitesMarkdown(entry.prerequisites), ""].join("\n")
 }
 
 function rootInventoryMarkdown(entries: PluginInventory[], config: Config): string {
@@ -704,12 +940,14 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
       contents: json(marketplace(plugins, harness, config)),
     }))
   const entries: PluginInventory[] = []
+  const publish = config.pi.publish && plugins.some((plugin) => plugin.harnesses.includes("pi")) ? readPublishSettings(root) : undefined
   for (const plugin of plugins) {
-    const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config)]
-    copies.push(...piRulesLoader(root, plugin, copies, config))
+    // options.json counts as a copy, so a published tree's `files` list names it on the first build too.
+    const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config), ...piRootCopies(root, plugin, config), ...optionDefaults(root, plugin)]
+    copies.push(...piRulesLoader(root, plugin, copies, config), ...prerequisiteFiles(root, plugin, config))
     const entry = buildInventory(root, plugin, copies, config)
     entries.push(entry)
-    outputs.push(...manifests(root, plugin, config, copies), ...optionDefaults(root, plugin), ...copies)
+    outputs.push(...manifests(root, plugin, config, copies, publish), ...copies)
     outputs.push({ file: path.join(pluginDir(root, plugin), "INVENTORY.md"), contents: pluginInventoryMarkdown(entry, config) })
   }
   outputs.push({ file: path.join(root, "INVENTORY.md"), contents: rootInventoryMarkdown(entries, config) })
@@ -722,15 +960,15 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
   return outputs
 }
 
-/** Files in common-owned directories of a listed harness tree. Any not in a fresh render is stale. */
+/** Files in the directories and root files the build owns in a listed harness tree. Any not in a fresh render is stale. */
 function ownedFiles(root: string, plugins: Plugin[], config: Config): string[] {
   return plugins.flatMap((plugin) =>
-    plugin.harnesses.flatMap((harness) =>
-      [...config.commonDirs, RUNTIME_DIR].flatMap((dir) => {
-        const base = path.join(harnessDir(root, plugin, harness), dir)
-        return listFiles(base).map((file) => path.join(base, file))
-      }),
-    ),
+    plugin.harnesses.flatMap((harness) => {
+      const tree = harnessDir(root, plugin, harness)
+      const inDirs = [...config.commonDirs, RUNTIME_DIR].flatMap((dir) => listFiles(path.join(tree, dir)).map((file) => path.join(tree, dir, file)))
+      const atRoot = ownedRootFiles(plugin, harness, config).map((file) => path.join(tree, file)).filter((file) => existsSync(file))
+      return [...inDirs, ...atRoot]
+    }),
   )
 }
 

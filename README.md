@@ -46,23 +46,28 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun ins
 | `pluginKey` | `agent-plugins` | Key in each plugin's `package.json` that holds its settings. |
 | `ompScope` | `@agent-plugins` | npm scope of the generated OMP package name. |
 | `piScope` | `@agent-plugins` | npm scope of the generated pi package name. |
+| `piPrefix` | `""` | Put before the plugin name in the pi package name: `"pi-"` gives `<piScope>/pi-<name>`. Lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit. A plugin's `piName` replaces it. |
 | `generatedBy` | `harness-kit build` | Names the generator in the note at the top of generated Markdown. |
 | `claude.strict` | `true` | `validate-claude` passes `--strict` to `claude plugin validate`. |
 | `claude.author`, `claude.license` | none | Written to a Claude manifest whose `package.json` sets no `author` or `license`. `claude.author` also takes a `url`. |
 | `claude.homepage`, `claude.repository` | none | `http(s)` URLs written to every Claude manifest and Claude marketplace entry. A plugin's own `claude` settings override them. |
 | `omp.packageType` | none | `"module"` or `"commonjs"`: adds `type` to the generated OMP `package.json`. |
+| `pi.publish` | `false` | `true` makes each generated pi `package.json` ready for npm. See "Publishing pi packages to npm". |
 
 ### Plugin settings
 
 Each plugin's `package.json` carries `name` (equal to the directory), `version`, and the `agent-plugins` key (or your `pluginKey`) with `description`, `category`, `harnesses`, and optionally `scope`, `discrepancies`, `claudeName`, `options` or `userConfig`. Standard `author` and `license` fields go into the Claude manifest.
 
 - `claudeName` renames the plugin in Claude's manifest and marketplace, which sets the `/<name>:<command>` namespace.
+- `piName` sets the pi package name without its scope, in place of `piPrefix` and the plugin name: `"piName": "pi-external-repo-worker"` gives `<piScope>/pi-external-repo-worker`. It follows npm's rules for a package name (lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit, 214 characters with the scope). Two plugins with the same pi package name are an error.
 - `claude` (optional object) holds Claude-only settings:
   - `dependencies`: a non-empty list copied into the manifest's `dependencies`. Each item is a plugin name, `"name@marketplace"`, or `{ "name", "version", "marketplace" }` where `version` is a semver range such as `~2.1.0`. See [Claude's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies.md). Declaring a dependency on another marketplace also needs that marketplace in `allowCrossMarketplaceDependenciesOn` in your `marketplace.json`, which this tool does not write.
   - `homepage`, `repository`: `http(s)` URLs that replace the repo-level `claude.homepage` and `claude.repository` for this plugin.
 - A `package.json` `author` object may carry a `url`. It is used only when `harness-kit.json` sets `claude.author.url`, so existing repos keep their output. It replaces the whole `claude.author` default; the two are not merged.
 - `options` (name to `{ description, default }`) become a Claude `userConfig` and an `options.json` in every harness tree.
 - `userConfig` is copied into the Claude manifest as is. Setting both `options` and `userConfig` is an error.
+- `prerequisites` lists the external CLIs the plugin needs. See "Prerequisites".
+- `companions` lists the pi packages the plugin works with. See "Companions".
 - `common/<dir>/x.<harness>.md` replaces `x.md` in that harness only.
 - An OMP or pi rule with no front matter gets `alwaysApply: true`. A rule with its own front matter, such as `description:`, is copied unchanged.
 - `__pycache__` directories are ignored.
@@ -113,18 +118,119 @@ Several plugins carry the same runtime code. harness-kit ships it as small modul
 
 Test helpers are not vendored. `@srobroek/harness-kit/testing` exports `createFakeContext({ options?, existingSkills?, existingAgents? })`, a fake OpenCode host context that records the system parts, skills, agents and disposals a plugin registers.
 
+### Prerequisites
+
+A plugin declares the external CLIs it needs once, in its `agent-plugins` key, and harness-kit generates the check:
+
+```json
+"prerequisites": [
+  {
+    "bin": "bd",
+    "for": "Beads gates and skills",
+    "required": true,
+    "install": { "mise": "aqua:gastownhall/beads", "url": "https://github.com/steveyegge/beads#install" },
+    "version": ">=1.3.0"
+  }
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `bin` | required | The command name, without a path. |
+| `for` | required | One line on what the plugin uses the tool for. The notice shows it. |
+| `required` | `false` | The plugin's gates need the tool to work. |
+| `install.mise` | none | A mise tool; the hint shows `mise use -g <mise>`. |
+| `install.url` | none | An http(s) page with install instructions. |
+| `install.npm` | none | `<package>@<range>` of an npm package that provides the bin; see "Prerequisites and npm publishing". |
+| `version` | none | A semver range, such as `>=1.3.0`, `^2.1` or `>=1.2 <2`, checked against `<bin> --version`. |
+
+`install` needs `mise`, `url` or both. A range uses numbers only. It takes these forms:
+
+- the comparators `<`, `<=`, `>`, `>=` and `=`;
+- `^` and `~`;
+- partial versions such as `1.2`, and `x` wildcards;
+- alternatives joined with `||`.
+
+Hyphen ranges and prerelease tags are errors.
+
+Declaring `prerequisites` vendors the check into the plugin's pi and OMP trees as two files:
+
+- `_kit/prereqs.ts`, listed in the tree's `pi.extensions` or `omp.extensions`;
+- `_kit/prereqs.json`, which holds the plugin's name and its list.
+
+Both harnesses get the same module, because they share the `session_start` event and `ctx.ui.notify`. No `runtime` opt-in is needed, and dropping `prerequisites` removes both files. OpenCode and Claude trees get no check; an OpenCode plugin keeps its own. The inventory lists the prerequisites whatever the plugin's harnesses: a "Prerequisites" table in its `INVENTORY.md`, and a `prerequisites` list in `inventory.json`.
+
+At `session_start`, the check does three things:
+
+1. It looks each `bin` up without a shell, as an executable file in a `PATH` directory. Relative entries are skipped.
+2. When a `version` is set, it runs `<bin> --version` with a 2-second timeout. It compares the first version-looking token of the output, `1.2` or `1.2.3`, and ignores a suffix such as `-rc.1`.
+3. It puts every unmet tool into one notice. A tool is unmet when it is missing, too old, or its version is unreadable. The notice gives each tool's `for` text and install hint: `mise use -g <mise>` when set, then `npm install -g <npm>`, then the URL.
+
+A session with a UI gets the notice as a warning through `ctx.ui.notify`. A session without a UI, as in `pi -p`, writes one line to stderr. That line appears once per process, and never after a UI notice, so OMP subagents stay quiet: they have no UI. When every tool is present, the check reports nothing. The lookups run once per process and the result is cached, so a newly installed tool counts after a restart.
+
+A gate extension calls `missingRequired()` and fails closed when it returns anything. It imports the helpers from its own tree's copy, here from `pi/extensions/gate.ts`:
+
+```ts
+import { missingRequired, prereqMessage } from "../_kit/prereqs.ts"
+
+export default function gate(pi) {
+  pi.on("tool_call", () => {
+    const missing = missingRequired()
+    if (missing.length > 0) return { block: true, reason: missing.map((bin) => prereqMessage(bin)).join("\n") }
+  })
+}
+```
+
+`missingRequired()` returns the `bin` of each required tool that is unmet. `prereqMessage(bin)` names the plugin and the tool, says what is wrong, and gives the install hint.
+
+#### Prerequisites and npm publishing
+
+The hint does not assume any one setup. `mise use -g` is one option among the others, and the URL appears whenever the plugin gives one. harness-kit adds no `preinstall`, `install` or `postinstall` script, so installing a plugin runs nothing.
+
+A tool that is itself an npm package, such as repomix, can come with the plugin instead. Set `install.npm` to its package and range, such as `repomix@^1.2.0`. With `pi.publish` on, `build` copies it into `dependencies` of the published pi `package.json`, so installing the package installs the tool (see "Publishing pi packages to npm"). harness-kit adds no `dependencies` to any other manifest; there the plugin author declares the entry.
+
+With `install.npm` set, the check looks in `node_modules/.bin` before `PATH`: first the package's own, then that of each directory above it. A dependency's bin lands in one of those, hoisted or not.
+
+Some tools are not npm packages, so they cannot be dependencies: bd, wt, chezmoi, fnox, uv, gh and python3, for example. For them, the check and its install hint are the only route.
+
+### Companions
+
+An agent package's prompts may refer to skills that other pi packages ship. Someone who installs it alone then gets prompts that point at missing skills. A plugin names those packages in its `agent-plugins` key:
+
+```json
+"companions": [
+  { "package": "@srobroek/pi-code-quality", "for": "the quality skills the prompts refer to", "required": true },
+  { "package": "@srobroek/pi-language-packs", "for": "language skills", "range": "^1.0.0" }
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `package` | required | The npm name of the pi package, scoped or not. Not one that pi supplies, and not the plugin's own. |
+| `for` | required | One line on what the plugin uses it for. |
+| `required` | `false` | The plugin's gates need the package to work. |
+| `range` | `*` | The semver range of the package in a published `peerDependencies`. |
+
+The pi tree uses the list in three places. OpenCode, Claude and OMP trees do not, because they install no pi packages:
+
+1. `pi/README.md` gets a "Works with" table: each package, whether it is required, what it is for, and `pi install npm:<package>`. It follows the plugin's own `README.md`. A plugin without one gets a heading with the pi package name and its description first. Dropping `companions` leaves the README in place when `pi.publish` is off; delete it by hand.
+2. With `pi.publish` on, `pi/package.json` lists each companion in `peerDependencies` at its range, and as optional in `peerDependenciesMeta`.
+3. The prerequisite check (`_kit/prereqs.ts`) is vendored for companions too. At `session_start` it reads the `packages` of pi's settings in the agent directory (`$PI_CODING_AGENT_DIR/settings.json`, default `~/.pi/agent/settings.json`) and in the project (`.pi/settings.json`). An entry `npm:<package>`, with or without `@<version>`, counts as installed, and so does a local path whose `package.json` has the companion's name. A git source does not count, because its name is not known without the clone. Each missing companion goes into the same notice as the missing tools, with its install command. `missingRequired()` and `prereqMessage(name)` cover required companions.
+
 ### The pi target
 
 [pi](https://pi.dev) installs a plugin as a pi package: `pi install ./plugins/<name>/pi`, or an npm or git source. A plugin that lists `pi` in its `harnesses` gets a `plugins/<name>/pi/` tree, built like the OMP tree:
 
-- `package.json` holds the name `<piScope>/<name>`, the plugin's version and description, and the `pi-package` keyword. Its `pi` key lists only what the tree ships, because an explicit manifest turns off pi's conventional directories:
+- `package.json` holds the pi package name, the plugin's version and description, and the `pi-package` keyword. The name is `<piScope>/<piName>`, or `<piScope>/<piPrefix><plugin name>` when the plugin sets no `piName`. Its `pi` key lists only what the tree ships, because an explicit manifest turns off pi's conventional directories:
 
   | Key | Lists | When |
   | --- | --- | --- |
-  | `extensions` | `./extensions/<file>` for each `.ts` or `.js` module, then `./_kit/rules.ts` | the tree has extension modules or rules |
+  | `extensions` | `./extensions/<file>` for each `.ts` or `.js` module, then `./_kit/rules.ts`, then `./_kit/prereqs.ts`; `[]` when the tree ships none of these, no skill and no command | the tree has extension modules, rules or prerequisites, or none of the keys `extensions`, `skills` and `prompts` would appear |
   | `skills` | `./skills` | `skills/` holds a skill |
   | `prompts` | `./commands` | `commands/` holds Markdown: pi loads commands as prompt templates |
   | `subagents.agents` | `./agents` | `agents/` holds an agent, for [pi-subagents](https://github.com/nicobailon/pi-subagents/blob/main/docs/agents.md) |
+
+  pi loads a package whose manifest lists none of `extensions`, `skills`, `prompts` and `themes` as one extension at the package root, and fails to start. So a package of agents only gets `"extensions": []`.
 
 - The `commonDirs` copies, `x.pi.md` variants and shared items work as for every harness.
 - Extensions are hand-authored TypeScript or JavaScript in `pi/extensions/`, as OMP extensions are in `omp/extensions/`. pi loads `.ts` directly, so there is no build step. Each module default-exports a function that takes pi's `ExtensionAPI`.
@@ -153,6 +259,7 @@ Test helpers are not vendored. `@srobroek/harness-kit/testing` exports `createFa
   - a skill without a `SKILL.md`, or a `SKILL.md` without a description
   - an extension that does not parse, or that has no default export
   - an agent whose front matter is not YAML, or that lacks `name` or `description`
+  - with `prerequisites` or `companions` declared, a missing `_kit/prereqs.ts`, a `pi.extensions` that does not list it, or a `_kit/prereqs.json` that differs from the lists in the plugin's `package.json`; without them, either file left over
 
 ## Commands
 
@@ -175,7 +282,7 @@ harness-kit update [--check]
 | `check` | `build --check`, then `validate-claude` and `validate-pi`. Warns when a workflow tag differs from the package pin (below). | 1 on any failure |
 | `update` | Reads the pin in `package.json` and the newest version (`bun info @srobroek/harness-kit version`, or `npm view` when the repo has only `package-lock.json`). If newer, runs `bun add --exact` (`npm install --save-exact` for npm; with `--dev` or `--optional` to match the field), then the new release's `build`. Prints `old -> new` or `up to date`. Never commits. `--check` only reports. | 1 with `--check` when outdated |
 
-The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `loadConfig`, `resolveConfig` and `validatePi` for tests. Each takes the resolved config as its last argument. `piPackageProblems(dir)` returns the `validate-pi` findings for one package directory.
+The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `loadConfig`, `resolveConfig` and `validatePi` for tests. Each takes the resolved config as its last argument. `piPackageProblems(dir)` returns the `validate-pi` findings for one package directory, and `prerequisiteProblems(dir, plugin)` the prerequisite findings, against a plugin from `readPlugins`.
 
 ## Presets
 
@@ -220,6 +327,8 @@ The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `
 
   Its `prepareCmd` runs `harness-kit stamp "$(basename "$PWD")" ${nextRelease.version} --git-add`. Install `semantic-release`, `@anolilab/multi-semantic-release`, `@semantic-release/changelog`, `@semantic-release/exec`, `@semantic-release/git`, `conventional-changelog-conventionalcommits` and `@visulima/yaml` (which multi-semantic-release imports without declaring) as dev dependencies. Keep `.multi-releaserc` (tag format) in your repo.
 
+  Pass `publishPi: true` to publish each plugin's pi tree to npm. See "Publishing pi packages to npm".
+
 ## GitHub workflows
 
 ```yaml
@@ -234,7 +343,53 @@ jobs:
 ```
 
 - `check.yml`: `bun install --frozen-lockfile` when the repo has `bun.lock`, otherwise `npm ci` (so a repo that has not migrated yet keeps working), then `harness-kit check`, `bun test`, `tsc`.
-- `release.yml`: `bun install --frozen-lockfile`, then `multi-semantic-release` with `GITHUB_TOKEN`. Your release config names `@semantic-release/github`.
+- `release.yml`: `bun install --frozen-lockfile`, then `multi-semantic-release` with `GITHUB_TOKEN`. Your release config names `@semantic-release/github`. The workflow requests no permissions of its own: the token has what the calling job grants.
+  - Input `npm-publish` (default `false`): sets up the npm registry and npm 11.5.1 or later, for the preset's `publishPi`. The calling job must also grant `id-token: write`.
+
+### Publishing pi packages to npm
+
+A repo can publish each plugin's pi tree as an npm package, installed with `pi install npm:<package>`, where `<package>` is the pi package name ("The pi target"). It is off by default, so a repo that must not publish needs nothing. To turn it on, set `"pi": { "publish": true }` in `harness-kit.json`.
+
+`build` then adds these fields to every generated pi `package.json`:
+
+| Field | Value |
+| --- | --- |
+| `license` | The plugin's `package.json` `license`, else the root `package.json` one. One of them is required. |
+| `repository` | `{ "type": "git", "url": <root repository>, "directory": "plugins/<name>/pi" }`. The root `package.json` must have `repository`: a GitHub shorthand (`owner/repo`) or an https URL. npm provenance checks it against the repository that publishes. |
+| `homepage`, `bugs` | Copied from the root `package.json` when it has them. |
+| `files` | Every top-level entry of the tree except `package.json`, `node_modules` and dot-entries: `extensions`, `_kit`, the `commonDirs` copies, `options.json`, `README.md`, `CHANGELOG.md` and `LICENSE`, as present. A file you put in the pi tree ships too. |
+| `publishConfig` | `{ "access": "public", "provenance": true }` |
+| `dependencies` | The package and range of each prerequisite's `install.npm`, by name: `"repomix@^1.2.0"` gives `"repomix": "^1.2.0"`. Two ranges for one package, or a package that pi supplies, are errors. |
+| `peerDependencies` | `"*"` for each host package that the tree's own modules import: `@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui` and `typebox`. pi supplies them, so they are never in `dependencies`. Each companion, at its `range`. Sorted by name. |
+| `peerDependenciesMeta` | `{ "optional": true }` for each companion. |
+
+The tree also gets copies of the plugin's `README.md` and `CHANGELOG.md` and of the repo's `LICENSE`, when they exist. pi shows a package's `CHANGELOG.md` after an update. `build --check` catches a stale copy. A copy whose source goes away is removed. Turning `pi.publish` off leaves the copies in place; delete them by hand. The generated `package.json` has no `private`, and `dependencies` only from npm prerequisites.
+
+Releases publish through npm trusted publishing (OIDC), with the npm CLI and no `NPM_TOKEN`. bun still installs and runs everything else:
+
+```js
+// release.config.mjs
+export default releaseConfig({ forge: ["@semantic-release/github"], publishPi: true })
+```
+
+```yaml
+  release:
+    uses: srobroek/harness-kit/.github/workflows/release.yml@vX.Y.Z
+    with: { npm-publish: true }
+    permissions: { contents: write, issues: write, pull-requests: write, id-token: write }
+```
+
+`publishPi` adds `publishCmd` to the preset's `@semantic-release/exec` step: `npm publish ./pi --provenance --access public`, run in each released plugin's directory. A plugin without a pi tree publishes nothing. semantic-release runs the publish step after every prepare step, so after the stamp and the pushed release commit.
+
+npm accepts a trusted publisher only for a package that exists, so publish each package's first version by hand, from a clone at its release commit:
+
+1. `npm login` (a session login; no token is stored).
+2. `npm publish ./plugins/<name>/pi --access public --provenance=false`. Provenance works only from CI.
+3. `npm trust github <package> --file <workflow>.yml --repo <owner>/<repo> --allow-publish`, with the pi package name from `plugins/<name>/pi/package.json`. This needs npm 11.15 or later and 2FA. Name your repo's workflow file that calls `release.yml`, not `release.yml` itself: npm checks the calling workflow.
+4. `npm logout`.
+
+> [!WARNING]
+> `publishPi` fails the release for any plugin whose package is not published and trusted yet: without a trusted publisher, npm has no way to authenticate. Publish every package by hand and run `npm trust github` for each one before you turn `npm-publish` on in the caller. A plugin that gets a pi tree later needs the same two steps before its first release.
 
 ### The workflow tag must match the package version
 

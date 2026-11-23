@@ -3,6 +3,13 @@
 #     release:
 #       uses: srobroek/harness-kit/.github/workflows/release.yml@v1.0.0   # same version as the package pin
 #       permissions: { contents: write, issues: write, pull-requests: write }
+#
+# With `npm-publish: true` the job also publishes each plugin's pi tree to npm (the release preset's `publishPi`),
+# through npm trusted publishing: no NPM_TOKEN. The caller then grants `id-token: write` as well:
+#       with: { npm-publish: true }
+#       permissions: { contents: write, issues: write, pull-requests: write, id-token: write }
+# This workflow declares no permissions of its own: a called workflow that asks for `id-token: write` fails to start
+# for every caller that does not grant it, so the caller's grant decides.
 name: release
 
 on:
@@ -14,11 +21,10 @@ on:
       bun-version:
         type: string
         default: "1.4.5"
-
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+      npm-publish:
+        description: Publish each plugin's pi tree to npm through trusted publishing (OIDC). The caller grants id-token write.
+        type: boolean
+        default: false
 
 jobs:
   release:
@@ -31,6 +37,10 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           package-manager-cache: false
+          registry-url: ${{ inputs.npm-publish && 'https://registry.npmjs.org' || '' }}
+      # Trusted publishing needs npm 11.5.1 or later; bun still installs and runs everything else.
+      - if: ${{ inputs.npm-publish }}
+        run: npm install --global npm@^11.5.1
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}

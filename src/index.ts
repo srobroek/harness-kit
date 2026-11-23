@@ -1,5 +1,5 @@
 // Library entry: the generator functions the CLI wraps, for tests and tooling.
-export { CONFIG_FILE, type Config, findRoot, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind, loadConfig, resolveConfig } from "./config"
+export { CONFIG_FILE, type Config, findRoot, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind, loadConfig, type Prerequisite, resolveConfig } from "./config"
 export {
   assertSemver,
   bareImports,
@@ -16,7 +16,7 @@ export {
   write,
 } from "./generate"
 export { type ValidateOptions, validateClaude } from "./validate-claude"
-export { piPackageProblems, validatePi } from "./validate-pi"
+export { piNameProblems, piPackageProblems, prerequisiteProblems, validatePi } from "./validate-pi"
 export { compareVersions, type Exec, PACKAGE_NAME, pinnedVersion, update, type UpdateResult } from "./update"
 export { workflowRefWarnings } from "./workflow-refs"
 export { RUNTIME_MODULES, RUNTIME_MODULE_NAMES, type RuntimeModuleName, resolveRuntime } from "./runtime"
