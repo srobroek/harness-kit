@@ -63,6 +63,7 @@ Each plugin's `package.json` carries `name` (equal to the directory), `version`,
 - A `package.json` `author` object may carry a `url`. It is used only when `harness-kit.json` sets `claude.author.url`, so existing repos keep their output. It replaces the whole `claude.author` default; the two are not merged.
 - `options` (name to `{ description, default }`) become a Claude `userConfig` and an `options.json` in every harness tree.
 - `userConfig` is copied into the Claude manifest as is. Setting both `options` and `userConfig` is an error.
+- `prerequisites` lists the external CLIs the plugin needs. See "Prerequisites".
 - `common/<dir>/x.<harness>.md` replaces `x.md` in that harness only.
 - An OMP or pi rule with no front matter gets `alwaysApply: true`. A rule with its own front matter, such as `description:`, is copied unchanged.
 - `__pycache__` directories are ignored.
@@ -113,6 +114,84 @@ Several plugins carry the same runtime code. harness-kit ships it as small modul
 
 Test helpers are not vendored. `@srobroek/harness-kit/testing` exports `createFakeContext({ options?, existingSkills?, existingAgents? })`, a fake OpenCode host context that records the system parts, skills, agents and disposals a plugin registers.
 
+### Prerequisites
+
+A plugin declares the external CLIs it needs once, in its `agent-plugins` key, and harness-kit generates the check:
+
+```json
+"prerequisites": [
+  {
+    "bin": "bd",
+    "for": "Beads gates and skills",
+    "required": true,
+    "install": { "mise": "aqua:gastownhall/beads", "url": "https://github.com/steveyegge/beads#install" },
+    "version": ">=1.3.0"
+  }
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `bin` | required | The command name, without a path. |
+| `for` | required | One line on what the plugin uses the tool for. The notice shows it. |
+| `required` | `false` | The plugin's gates need the tool to work. |
+| `install.mise` | none | A mise tool; the hint shows `mise use -g <mise>`. |
+| `install.url` | none | An http(s) page with install instructions. |
+| `install.npm` | none | `<package>@<range>` of an npm package that provides the bin; see "Prerequisites and npm publishing". |
+| `version` | none | A semver range, such as `>=1.3.0`, `^2.1` or `>=1.2 <2`, checked against `<bin> --version`. |
+
+`install` needs `mise`, `url` or both. A range uses numbers only. It takes these forms:
+
+- the comparators `<`, `<=`, `>`, `>=` and `=`;
+- `^` and `~`;
+- partial versions such as `1.2`, and `x` wildcards;
+- alternatives joined with `||`.
+
+Hyphen ranges and prerelease tags are errors.
+
+Declaring `prerequisites` vendors the check into the plugin's pi and OMP trees as two files:
+
+- `_kit/prereqs.ts`, listed in the tree's `pi.extensions` or `omp.extensions`;
+- `_kit/prereqs.json`, which holds the plugin's name and its list.
+
+Both harnesses get the same module, because they share the `session_start` event and `ctx.ui.notify`. No `runtime` opt-in is needed, and dropping `prerequisites` removes both files. OpenCode and Claude trees get no check; an OpenCode plugin keeps its own. The inventory lists the prerequisites whatever the plugin's harnesses: a "Prerequisites" table in its `INVENTORY.md`, and a `prerequisites` list in `inventory.json`.
+
+At `session_start`, the check does three things:
+
+1. It looks each `bin` up without a shell, as an executable file in a `PATH` directory. Relative entries are skipped.
+2. When a `version` is set, it runs `<bin> --version` with a 2-second timeout. It compares the first version-looking token of the output, `1.2` or `1.2.3`, and ignores a suffix such as `-rc.1`.
+3. It puts every unmet tool into one notice. A tool is unmet when it is missing, too old, or its version is unreadable. The notice gives each tool's `for` text and install hint: `mise use -g <mise>` when set, then `npm install -g <npm>`, then the URL.
+
+A session with a UI gets the notice as a warning through `ctx.ui.notify`. A session without a UI, as in `pi -p`, writes one line to stderr. That line appears once per process, and never after a UI notice, so OMP subagents stay quiet: they have no UI. When every tool is present, the check reports nothing. The lookups run once per process and the result is cached, so a newly installed tool counts after a restart.
+
+A gate extension calls `missingRequired()` and fails closed when it returns anything. It imports the helpers from its own tree's copy, here from `pi/extensions/gate.ts`:
+
+```ts
+import { missingRequired, prereqMessage } from "../_kit/prereqs.ts"
+
+export default function gate(pi) {
+  pi.on("tool_call", () => {
+    const missing = missingRequired()
+    if (missing.length > 0) return { block: true, reason: missing.map((bin) => prereqMessage(bin)).join("\n") }
+  })
+}
+```
+
+`missingRequired()` returns the `bin` of each required tool that is unmet. `prereqMessage(bin)` names the plugin and the tool, says what is wrong, and gives the install hint.
+
+#### Prerequisites and npm publishing
+
+The hint does not assume any one setup. `mise use -g` is one option among the others, and the URL appears whenever the plugin gives one. harness-kit adds no `preinstall`, `install` or `postinstall` script, so installing a plugin runs nothing.
+
+A tool that is itself an npm package, such as repomix, can come with the plugin instead:
+
+1. Set `install.npm` to its package and range, such as `repomix@^1.2.0`.
+2. List the same entry under `dependencies` of the package you publish. harness-kit does not add it to any manifest; the plugin author declares it.
+
+With `install.npm` set, the check looks in `node_modules/.bin` before `PATH`: first the package's own, then that of each directory above it. A dependency's bin lands in one of those, hoisted or not.
+
+Some tools are not npm packages, so they cannot be dependencies: bd, wt, chezmoi, fnox, uv, gh and python3, for example. For them, the check and its install hint are the only route.
+
 ### The pi target
 
 [pi](https://pi.dev) installs a plugin as a pi package: `pi install ./plugins/<name>/pi`, or an npm or git source. A plugin that lists `pi` in its `harnesses` gets a `plugins/<name>/pi/` tree, built like the OMP tree:
@@ -121,7 +200,7 @@ Test helpers are not vendored. `@srobroek/harness-kit/testing` exports `createFa
 
   | Key | Lists | When |
   | --- | --- | --- |
-  | `extensions` | `./extensions/<file>` for each `.ts` or `.js` module, then `./_kit/rules.ts` | the tree has extension modules or rules |
+  | `extensions` | `./extensions/<file>` for each `.ts` or `.js` module, then `./_kit/rules.ts`, then `./_kit/prereqs.ts` | the tree has extension modules, rules or prerequisites |
   | `skills` | `./skills` | `skills/` holds a skill |
   | `prompts` | `./commands` | `commands/` holds Markdown: pi loads commands as prompt templates |
   | `subagents.agents` | `./agents` | `agents/` holds an agent, for [pi-subagents](https://github.com/nicobailon/pi-subagents/blob/main/docs/agents.md) |
@@ -153,6 +232,7 @@ Test helpers are not vendored. `@srobroek/harness-kit/testing` exports `createFa
   - a skill without a `SKILL.md`, or a `SKILL.md` without a description
   - an extension that does not parse, or that has no default export
   - an agent whose front matter is not YAML, or that lacks `name` or `description`
+  - with `prerequisites` declared, a missing `_kit/prereqs.ts`, a `pi.extensions` that does not list it, or a `_kit/prereqs.json` that differs from the list in the plugin's `package.json`; without them, either file left over
 
 ## Commands
 
@@ -175,7 +255,7 @@ harness-kit update [--check]
 | `check` | `build --check`, then `validate-claude` and `validate-pi`. Warns when a workflow tag differs from the package pin (below). | 1 on any failure |
 | `update` | Reads the pin in `package.json` and the newest version (`bun info @srobroek/harness-kit version`, or `npm view` when the repo has only `package-lock.json`). If newer, runs `bun add --exact` (`npm install --save-exact` for npm; with `--dev` or `--optional` to match the field), then the new release's `build`. Prints `old -> new` or `up to date`. Never commits. `--check` only reports. | 1 with `--check` when outdated |
 
-The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `loadConfig`, `resolveConfig` and `validatePi` for tests. Each takes the resolved config as its last argument. `piPackageProblems(dir)` returns the `validate-pi` findings for one package directory.
+The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `loadConfig`, `resolveConfig` and `validatePi` for tests. Each takes the resolved config as its last argument. `piPackageProblems(dir)` returns the `validate-pi` findings for one package directory, and `prerequisiteProblems(dir, plugin)` the prerequisite findings, against a plugin from `readPlugins`.
 
 ## Presets
 

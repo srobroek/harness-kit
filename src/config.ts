@@ -2,6 +2,8 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
+// The prerequisite check's own types and range grammar, so the generator accepts exactly what the vendored module reads.
+import { type Prerequisite, parseRange } from "../runtime/pi/prereqs"
 import { fail, httpUrl, isRecord, nonEmptyString } from "./util"
 
 export const CONFIG_FILE = "harness-kit.json"
@@ -53,6 +55,66 @@ const DEFAULT_KINDS: Kind[] = ["skills", "agents", "commands", "rules", "hooks",
 function onlyKeys(where: string, field: string, value: Record<string, unknown>, allowed: string[]): void {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key))
   if (unknown.length > 0) fail(where, `unknown key${unknown.length > 1 ? "s" : ""} ${unknown.map((k) => `"${field}${k}"`).join(", ")} (allowed: ${allowed.join(", ")})`)
+}
+
+export type { Prerequisite }
+
+const BIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
+const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(.+)$/
+
+/** A semver range the prerequisite check can evaluate. */
+function versionRange(where: string, field: string, raw: unknown): string {
+  const range = nonEmptyString(where, field, raw)
+  try {
+    parseRange(range)
+  } catch (error) {
+    fail(where, `"${field}": ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return range
+}
+
+/**
+ * Validate a plugin's `prerequisites` list and fill in `required: false`. `field` is the key path errors name, such as
+ * `agent-plugins.prerequisites`. Keys come back in one order, so the generated files do not depend on the author's.
+ */
+export function readPrerequisites(where: string, field: string, raw: unknown): Prerequisite[] | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.length === 0) fail(where, `"${field}" must be a non-empty list of { bin, for, install } objects`)
+  const seen = new Set<string>()
+  return raw.map((item: unknown, index): Prerequisite => {
+    const at = `${field}[${index}]`
+    if (!isRecord(item)) fail(where, `"${at}" must be an object with bin, for and install`)
+    onlyKeys(where, `${at}.`, item, ["bin", "for", "required", "install", "version"])
+    const bin = nonEmptyString(where, `${at}.bin`, item.bin)
+    if (!BIN_NAME.test(bin)) fail(where, `"${at}.bin" must be a command name without a path, got ${JSON.stringify(bin)}`)
+    if (seen.has(bin)) fail(where, `"${field}" lists "${bin}" twice`)
+    seen.add(bin)
+    const purpose = nonEmptyString(where, `${at}.for`, item.for)
+    if (/[\r\n]/.test(purpose)) fail(where, `"${at}.for" must be one line`)
+    if (item.required !== undefined && typeof item.required !== "boolean") fail(where, `"${at}.required" must be true or false`)
+
+    const raw = item.install
+    if (!isRecord(raw)) fail(where, `"${at}.install" must be an object with "mise", "url" or both`)
+    onlyKeys(where, `${at}.install.`, raw, ["mise", "url", "npm"])
+    const install: Prerequisite["install"] = {}
+    if (raw.mise !== undefined) {
+      install.mise = nonEmptyString(where, `${at}.install.mise`, raw.mise)
+      if (/\s/.test(install.mise)) fail(where, `"${at}.install.mise" must be one mise tool, such as "aqua:owner/repo", got ${JSON.stringify(install.mise)}`)
+    }
+    if (raw.url !== undefined) install.url = httpUrl(where, `${at}.install.url`, raw.url)
+    if (raw.npm !== undefined) {
+      const spec = nonEmptyString(where, `${at}.install.npm`, raw.npm)
+      const match = NPM_SPEC.exec(spec)
+      if (!match) fail(where, `"${at}.install.npm" must be "<package>@<range>", such as "repomix@^1.2.0", got ${JSON.stringify(spec)}`)
+      versionRange(where, `${at}.install.npm`, match[2])
+      install.npm = spec
+    }
+    if (install.mise === undefined && install.url === undefined) fail(where, `"${at}.install" needs "mise", "url" or both`)
+
+    const prerequisite: Prerequisite = { bin, for: purpose, required: item.required === true, install }
+    if (item.version !== undefined) prerequisite.version = versionRange(where, `${at}.version`, item.version)
+    return prerequisite
+  })
 }
 
 /** A list of unique strings drawn from `allowed` (when given), returned in the order of `allowed`. */

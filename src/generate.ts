@@ -4,9 +4,19 @@
 
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind } from "./config"
+import { installHint } from "../runtime/pi/prereqs"
+import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind, type Prerequisite, readPrerequisites } from "./config"
 import { piAgent } from "./pi"
-import { RUNTIME_DIR, type RuntimeModuleName, resolveRuntime, vendoredFile, vendoredSource } from "./runtime"
+import {
+  PREREQS_DATA,
+  PREREQS_HARNESSES,
+  PREREQS_MODULE,
+  RUNTIME_DIR,
+  type RuntimeModuleName,
+  resolveRuntime,
+  vendoredFile,
+  vendoredSource,
+} from "./runtime"
 import { fail, httpUrl, isRecord, json, nonEmptyString } from "./util"
 
 export type { Harness, Kind }
@@ -43,6 +53,8 @@ export type Plugin = {
   shared?: string[]
   /** Runtime modules vendored into the harness trees as `_kit/`, with their dependencies. Absent when the plugin opts out. */
   runtime?: RuntimeModuleName[]
+  /** External CLIs the plugin needs. The pi and OMP trees get a check that reports the missing ones. */
+  prerequisites?: Prerequisite[]
 }
 
 /** `executable` is set on copies of source files: the output must carry the source's executable bit. Unset leaves the mode alone. */
@@ -147,6 +159,7 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
   const selectedHarnesses = KNOWN_HARNESSES.filter((h) => harnesses.includes(h))
   const runtime = readRuntime(where, key, own.runtime, selectedHarnesses)
   const shared = readShared(where, key, own.shared, config)
+  const prerequisites = readPrerequisites(where, `${key}.prerequisites`, own.prerequisites)
   // Keep canonical harness order so output does not depend on how the author ordered the list.
   return {
     name,
@@ -164,6 +177,7 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     userConfig,
     shared,
     runtime,
+    prerequisites,
   }
 }
 
@@ -430,6 +444,23 @@ function piRulesLoader(root: string, plugin: Plugin, copies: readonly Output[], 
   return [{ file: path.join(harnessDir(root, plugin, "pi"), RUNTIME_DIR, PI_RULES_LOADER), contents: vendoredFile("pi", PI_RULES_LOADER, config.generatedBy) }]
 }
 
+/** The contents of `_kit/prereqs.json`, which the vendored prerequisite check reads. */
+export function prerequisiteData(plugin: Pick<Plugin, "name" | "prerequisites">): { plugin: string; prerequisites: Prerequisite[] } {
+  return { plugin: plugin.name, prerequisites: plugin.prerequisites ?? [] }
+}
+
+/** The prerequisite check and the plugin's list, in each pi and OMP tree, when the plugin declares prerequisites. */
+function prerequisiteFiles(root: string, plugin: Plugin, config: Config): Output[] {
+  if (!plugin.prerequisites) return []
+  return PREREQS_HARNESSES.filter((harness) => plugin.harnesses.includes(harness)).flatMap((harness) => [
+    { file: path.join(harnessDir(root, plugin, harness), RUNTIME_DIR, PREREQS_MODULE), contents: vendoredFile("pi", PREREQS_MODULE, config.generatedBy) },
+    { file: path.join(harnessDir(root, plugin, harness), RUNTIME_DIR, PREREQS_DATA), contents: json(prerequisiteData(plugin)) },
+  ])
+}
+
+/** `./_kit/prereqs.ts` when this build vendors it into the tree; `files` are relative to the tree. */
+const prereqsEntry = (files: readonly string[]) => (files.includes(`${RUNTIME_DIR}/${PREREQS_MODULE}`) ? [`./${RUNTIME_DIR}/${PREREQS_MODULE}`] : [])
+
 function ompExtensions(root: string, plugin: Plugin): string[] {
   const dir = path.join(harnessDir(root, plugin, "omp"), "extensions")
   if (!existsSync(dir)) return []
@@ -461,6 +492,7 @@ function piResources(files: readonly string[]): Record<string, unknown> {
     ...files.filter((file) => /^extensions\/[^/]+$/.test(file) && MODULE_EXTENSION.test(file)),
     ...files.filter((file) => file === `${RUNTIME_DIR}/${PI_RULES_LOADER}`),
   ].map((file) => `./${file}`)
+  extensions.push(...prereqsEntry(files))
   const has = (accept: (file: string) => boolean) => files.some(accept)
   return {
     ...(extensions.length > 0 ? { extensions } : {}),
@@ -516,6 +548,7 @@ function manifests(root: string, plugin: Plugin, config: Config, copies: readonl
   const { name, version, description, category } = plugin
   const outputs: Output[] = []
   const at = (harness: Harness, file: string) => path.join(harnessDir(root, plugin, harness), file)
+  const ompEntries = plugin.harnesses.includes("omp") ? [...ompExtensions(root, plugin), ...prereqsEntry(generatedIn(root, plugin, "omp", copies))] : []
   if (plugin.harnesses.includes("claude")) {
     const author = plugin.author ?? config.claude.author
     const { homepage, repository } = claudeLinks(plugin, config)
@@ -545,7 +578,7 @@ function manifests(root: string, plugin: Plugin, config: Config, copies: readonl
         description,
         private: true,
         ...(config.omp.packageType ? { type: config.omp.packageType } : {}),
-        omp: ompExtensions(root, plugin).length > 0 ? { extensions: ompExtensions(root, plugin) } : {},
+        omp: ompEntries.length > 0 ? { extensions: ompEntries } : {},
       }),
     })
     outputs.push({ file: at("omp", ".omp-plugin/plugin.json"), contents: json({ name, description, version, category }) })
@@ -641,12 +674,22 @@ function buildInventory(root: string, plugin: Plugin, copies: Output[], config: 
 }
 
 const cell = (names: string[]) => (names.length > 0 ? names.join(", ") : "-")
+const tableText = (text: string) => text.replaceAll("|", "\\|")
+
+/** The plugin's prerequisites as a Markdown section; empty when it declares none. Every harness needs them, so they have no column. */
+function prerequisitesMarkdown(prerequisites: readonly Prerequisite[] | undefined): string[] {
+  if (!prerequisites) return []
+  const rows = prerequisites.map((item) =>
+    [item.bin, item.required ? "yes" : "no", item.version ?? "any", item.for, installHint(item.install)].map(tableText).join(" | "),
+  )
+  return ["", "## Prerequisites", "", "| Tool | Required | Version | For | Install |", "| --- | --- | --- | --- | --- |", ...rows.map((row) => `| ${row} |`)]
+}
 
 function pluginInventoryMarkdown(entry: PluginInventory, config: Config): string {
   const header = `| Kind | ${entry.harnesses.join(" | ")} |`
   const divider = `| --- |${entry.harnesses.map(() => " --- |").join("")}`
   const rows = config.kinds.map((kind) => `| ${kind} | ${entry.harnesses.map((h) => cell(entry.contents[h]![kind])).join(" | ")} |`)
-  return [generatedNote(config), `# ${entry.name}`, "", entry.description, "", header, divider, ...rows, ""].join("\n")
+  return [generatedNote(config), `# ${entry.name}`, "", entry.description, "", header, divider, ...rows, ...prerequisitesMarkdown(entry.prerequisites), ""].join("\n")
 }
 
 function rootInventoryMarkdown(entries: PluginInventory[], config: Config): string {
@@ -706,7 +749,7 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
   const entries: PluginInventory[] = []
   for (const plugin of plugins) {
     const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config)]
-    copies.push(...piRulesLoader(root, plugin, copies, config))
+    copies.push(...piRulesLoader(root, plugin, copies, config), ...prerequisiteFiles(root, plugin, config))
     const entry = buildInventory(root, plugin, copies, config)
     entries.push(entry)
     outputs.push(...manifests(root, plugin, config, copies), ...optionDefaults(root, plugin), ...copies)

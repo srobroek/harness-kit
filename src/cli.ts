@@ -21,7 +21,7 @@ commands:
                                 --check only reports (exit 1 when outdated). Never commits.
   validate-claude [--no-strict] run \`claude plugin validate\` on every Claude plugin and the marketplace
   validate-pi                   check every pi package without running pi: manifest paths, skills, extension syntax,
-                                agent front matter
+                                agent front matter, the prerequisite check
   check                         build --check, then validate-claude and validate-pi; warns when a workflow tag and the
                                 package pin differ
 

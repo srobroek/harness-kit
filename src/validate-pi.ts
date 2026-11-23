@@ -3,7 +3,10 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
+import { isDeepStrictEqual } from "node:util"
 import type { Config } from "./config"
+import { type Plugin, prerequisiteData, readPlugins } from "./generate"
+import { PREREQS_DATA, PREREQS_MODULE, RUNTIME_DIR } from "./runtime"
 import { isRecord } from "./util"
 
 const FRONT_MATTER = /^---\r?\n(?:([\s\S]*?)\r?\n)?---[^\S\r\n]*(?:\r?\n|$)/
@@ -134,6 +137,41 @@ export function piPackageProblems(dir: string): string[] {
   return problems
 }
 
+/** The `pi.extensions` list of a package, or undefined when its manifest cannot be read (`piPackageProblems` reports that). */
+function listedExtensions(dir: string): unknown[] | undefined {
+  try {
+    const manifest: unknown = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
+    if (!isRecord(manifest) || !isRecord(manifest.pi)) return undefined
+    return Array.isArray(manifest.pi.extensions) ? manifest.pi.extensions : []
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Problems with the prerequisite check of one pi package, against the plugin's `prerequisites`: a declaring plugin needs
+ * `_kit/prereqs.ts`, listed as an extension, and a `_kit/prereqs.json` equal to its list; a plugin without them, neither file.
+ */
+export function prerequisiteProblems(dir: string, plugin: Pick<Plugin, "name" | "prerequisites">): string[] {
+  const module = `${RUNTIME_DIR}/${PREREQS_MODULE}`
+  const data = `${RUNTIME_DIR}/${PREREQS_DATA}`
+  const present = (file: string) => existsSync(path.join(dir, file))
+  if (!plugin.prerequisites) return [module, data].filter(present).map((file) => `${file}: the plugin declares no prerequisites; run harness-kit build to remove it`)
+  const problems: string[] = []
+  if (!present(module)) problems.push(`${module}: missing, but the plugin declares prerequisites; run harness-kit build`)
+  const extensions = listedExtensions(dir)
+  if (extensions && !extensions.includes(`./${module}`)) problems.push(`package.json: "pi.extensions" must list "./${module}", or pi does not run the prerequisite check`)
+  if (!present(data)) return [...problems, `${data}: missing, but the plugin declares prerequisites; run harness-kit build`]
+  let listed: unknown
+  try {
+    listed = JSON.parse(readFileSync(path.join(dir, data), "utf8"))
+  } catch (error) {
+    return [...problems, `${data}: not valid JSON (${error instanceof Error ? error.message : String(error)})`]
+  }
+  if (!isDeepStrictEqual(listed, prerequisiteData(plugin))) problems.push(`${data}: does not match "prerequisites" in plugins/${plugin.name}/package.json; run harness-kit build`)
+  return problems
+}
+
 /** Exit status: 0 when every pi package passes (or there is none), 1 when one has a problem. */
 export function validatePi(root: string, config: Config): number {
   if (!config.harnesses.includes("pi")) {
@@ -145,7 +183,13 @@ export function validatePi(root: string, config: Config): number {
     console.log("no pi packages yet; nothing to validate")
     return 0
   }
-  const problems = trees.flatMap((tree) => piPackageProblems(path.join(root, tree)).map((problem) => `${tree.split(path.sep).join("/")}/${problem}`))
+  const plugins = new Map(readPlugins(root, config).map((plugin) => [plugin.name, plugin]))
+  const problems = trees.flatMap((tree) => {
+    const dir = path.join(root, tree)
+    const plugin = plugins.get(path.basename(path.dirname(tree)))
+    const found = [...piPackageProblems(dir), ...(plugin ? prerequisiteProblems(dir, plugin) : [])]
+    return found.map((problem) => `${tree.split(path.sep).join("/")}/${problem}`)
+  })
   for (const problem of problems) console.error(problem)
   if (problems.length > 0) return 1
   console.log(`pi packages are valid (${trees.length} plugin${trees.length === 1 ? "" : "s"})`)
