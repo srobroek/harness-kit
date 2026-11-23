@@ -30,6 +30,8 @@ export type Config = {
   ompScope: string
   /** npm scope of the generated pi package name. */
   piScope: string
+  /** Put before the plugin name in the pi package name, unless the plugin sets `piName`. */
+  piPrefix: string
   /** Names the generator in the note at the top of generated Markdown files. */
   generatedBy: string
   claude: {
@@ -48,9 +50,13 @@ export type Config = {
   pi: { publish: boolean }
 }
 
-const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "sharedDir", "pluginKey", "ompScope", "piScope", "generatedBy", "claude", "omp", "pi"]
+const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "sharedDir", "pluginKey", "ompScope", "piScope", "piPrefix", "generatedBy", "claude", "omp", "pi"]
 const DIR_NAME = /^[a-z0-9][a-z0-9._-]*$/
 const PACKAGE_SCOPE = /^@[a-z0-9][a-z0-9._-]*$/
+/** The part of an npm package name after the scope: lowercase and URL-safe, starting with a letter or digit. */
+export const NPM_NAME = /^[a-z0-9][a-z0-9._-]*$/
+/** npm's limit on the length of a package name, scope included. */
+export const NPM_NAME_MAX = 214
 
 const DEFAULT_KINDS: Kind[] = ["skills", "agents", "commands", "rules", "hooks", "tools", "extensions", "mcp"]
 
@@ -172,6 +178,11 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
   if (!PACKAGE_SCOPE.test(ompScope)) fail(where, `"ompScope" must look like "@scope", got "${ompScope}"`)
   const piScope = raw.piScope === undefined ? "@agent-plugins" : nonEmptyString(where, "piScope", raw.piScope)
   if (!PACKAGE_SCOPE.test(piScope)) fail(where, `"piScope" must look like "@scope", got "${piScope}"`)
+  const piPrefix = raw.piPrefix === undefined ? "" : raw.piPrefix
+  // A plugin name is letters, digits and hyphens, so a prefix that could start a package name gives a valid name.
+  if (typeof piPrefix !== "string" || (piPrefix !== "" && !NPM_NAME.test(piPrefix))) {
+    fail(where, `"piPrefix" must be lowercase letters, digits, ".", "_" or "-", starting with a letter or digit, got ${JSON.stringify(piPrefix)}`)
+  }
   const generatedBy = raw.generatedBy === undefined ? "harness-kit build" : nonEmptyString(where, "generatedBy", raw.generatedBy)
 
   const claude: Config["claude"] = { strict: true }
@@ -222,6 +233,7 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
     pluginKey,
     ompScope,
     piScope,
+    piPrefix,
     generatedBy,
     claude,
     omp,

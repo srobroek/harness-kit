@@ -5,7 +5,7 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { installHint } from "../runtime/pi/prereqs"
-import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind, npmSpec, type Prerequisite, readPrerequisites } from "./config"
+import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind, NPM_NAME, NPM_NAME_MAX, npmSpec, type Prerequisite, readPrerequisites } from "./config"
 import { piAgent } from "./pi"
 import {
   PREREQS_DATA,
@@ -42,6 +42,8 @@ export type Plugin = {
   options?: Record<string, PluginOption>
   /** Name of the Claude plugin when it differs from the directory name; it sets the `/<name>:<command>` namespace. */
   claudeName?: string
+  /** The pi package name without its scope, when it is not `piPrefix` + the plugin name. */
+  piName?: string
   /** Author and license go into the Claude manifest, which strict validation requires. */
   author?: { name: string; url?: string }
   license?: string
@@ -142,6 +144,13 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     claudeName = nonEmptyString(where, `${key}.claudeName`, own.claudeName)
     if (!NAME_PATTERN.test(claudeName)) fail(where, `"${key}.claudeName" must be kebab-case`)
   }
+  let piName: string | undefined
+  if (own.piName !== undefined) {
+    piName = nonEmptyString(where, `${key}.piName`, own.piName)
+    if (!NPM_NAME.test(piName)) {
+      fail(where, `"${key}.piName" must be an npm package name without a scope (the scope is "piScope"): lowercase letters, digits, ".", "_" or "-", starting with a letter or digit, got ${JSON.stringify(piName)}`)
+    }
+  }
   let author: { name: string; url?: string } | undefined
   if (manifest.author !== undefined) {
     const raw = manifest.author
@@ -171,6 +180,7 @@ export function readPlugin(root: string, name: string, config: Config): Plugin {
     discrepancies,
     options,
     claudeName,
+    piName,
     author,
     license,
     claude,
@@ -294,12 +304,31 @@ function checkOpencodeEntries(root: string, plugin: Plugin): void {
   }
 }
 
+/** The name of a plugin's pi package: `<piScope>/<piName>`, or `<piScope>/<piPrefix><plugin name>` without `piName`. */
+export function piPackageName(plugin: Pick<Plugin, "name" | "piName">, config: Pick<Config, "piScope" | "piPrefix">): string {
+  return `${config.piScope}/${plugin.piName ?? `${config.piPrefix}${plugin.name}`}`
+}
+
+/** Every pi package name fits npm's length limit and belongs to one plugin. */
+function checkPiNames(plugins: readonly Plugin[], config: Config): void {
+  const owners = new Map<string, string>()
+  for (const plugin of plugins.filter((item) => item.harnesses.includes("pi") || item.piName !== undefined)) {
+    const where = `plugins/${plugin.name}/package.json`
+    const name = piPackageName(plugin, config)
+    if (name.length > NPM_NAME_MAX) fail(where, `pi package name "${name}" is longer than npm's ${NPM_NAME_MAX} characters`)
+    const owner = owners.get(name)
+    if (owner !== undefined) fail(where, `pi package name "${name}" is also the name of plugin "${owner}"; set a different "${config.pluginKey}.piName"`)
+    owners.set(name, plugin.name)
+  }
+}
+
 export function readPlugins(root: string, config: Config): Plugin[] {
   const plugins = listDirs(path.join(root, "plugins")).map((name) => readPlugin(root, name, config))
   for (const plugin of plugins) {
     checkOpencodeEntries(root, plugin)
     resolveShared(root, plugin, config)
   }
+  checkPiNames(plugins, config)
   return plugins
 }
 
@@ -694,7 +723,7 @@ function manifests(root: string, plugin: Plugin, config: Config, copies: readonl
     const npm = publish ? publishFields(root, plugin, publish, files, ownFiles(root, plugin, "pi", config)) : {}
     outputs.push({
       file: at("pi", "package.json"),
-      contents: json({ name: `${config.piScope}/${name}`, version, description, keywords: ["pi-package"], ...npm, pi: piResources(files) }),
+      contents: json({ name: piPackageName(plugin, config), version, description, keywords: ["pi-package"], ...npm, pi: piResources(files) }),
     })
   }
   return outputs

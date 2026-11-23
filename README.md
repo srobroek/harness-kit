@@ -46,6 +46,7 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun ins
 | `pluginKey` | `agent-plugins` | Key in each plugin's `package.json` that holds its settings. |
 | `ompScope` | `@agent-plugins` | npm scope of the generated OMP package name. |
 | `piScope` | `@agent-plugins` | npm scope of the generated pi package name. |
+| `piPrefix` | `""` | Put before the plugin name in the pi package name: `"pi-"` gives `<piScope>/pi-<name>`. Lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit. A plugin's `piName` replaces it. |
 | `generatedBy` | `harness-kit build` | Names the generator in the note at the top of generated Markdown. |
 | `claude.strict` | `true` | `validate-claude` passes `--strict` to `claude plugin validate`. |
 | `claude.author`, `claude.license` | none | Written to a Claude manifest whose `package.json` sets no `author` or `license`. `claude.author` also takes a `url`. |
@@ -58,6 +59,7 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun ins
 Each plugin's `package.json` carries `name` (equal to the directory), `version`, and the `agent-plugins` key (or your `pluginKey`) with `description`, `category`, `harnesses`, and optionally `scope`, `discrepancies`, `claudeName`, `options` or `userConfig`. Standard `author` and `license` fields go into the Claude manifest.
 
 - `claudeName` renames the plugin in Claude's manifest and marketplace, which sets the `/<name>:<command>` namespace.
+- `piName` sets the pi package name without its scope, in place of `piPrefix` and the plugin name: `"piName": "pi-external-repo-worker"` gives `<piScope>/pi-external-repo-worker`. It follows npm's rules for a package name (lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit, 214 characters with the scope). Two plugins with the same pi package name are an error.
 - `claude` (optional object) holds Claude-only settings:
   - `dependencies`: a non-empty list copied into the manifest's `dependencies`. Each item is a plugin name, `"name@marketplace"`, or `{ "name", "version", "marketplace" }` where `version` is a semver range such as `~2.1.0`. See [Claude's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies.md). Declaring a dependency on another marketplace also needs that marketplace in `allowCrossMarketplaceDependenciesOn` in your `marketplace.json`, which this tool does not write.
   - `homepage`, `repository`: `http(s)` URLs that replace the repo-level `claude.homepage` and `claude.repository` for this plugin.
@@ -194,7 +196,7 @@ Some tools are not npm packages, so they cannot be dependencies: bd, wt, chezmoi
 
 [pi](https://pi.dev) installs a plugin as a pi package: `pi install ./plugins/<name>/pi`, or an npm or git source. A plugin that lists `pi` in its `harnesses` gets a `plugins/<name>/pi/` tree, built like the OMP tree:
 
-- `package.json` holds the name `<piScope>/<name>`, the plugin's version and description, and the `pi-package` keyword. Its `pi` key lists only what the tree ships, because an explicit manifest turns off pi's conventional directories:
+- `package.json` holds the pi package name, the plugin's version and description, and the `pi-package` keyword. The name is `<piScope>/<piName>`, or `<piScope>/<piPrefix><plugin name>` when the plugin sets no `piName`. Its `pi` key lists only what the tree ships, because an explicit manifest turns off pi's conventional directories:
 
   | Key | Lists | When |
   | --- | --- | --- |
@@ -319,7 +321,7 @@ jobs:
 
 ### Publishing pi packages to npm
 
-A repo can publish each plugin's pi tree as an npm package, installed with `pi install npm:<piScope>/<name>`. It is off by default, so a repo that must not publish needs nothing. To turn it on, set `"pi": { "publish": true }` in `harness-kit.json`.
+A repo can publish each plugin's pi tree as an npm package, installed with `pi install npm:<package>`, where `<package>` is the pi package name ("The pi target"). It is off by default, so a repo that must not publish needs nothing. To turn it on, set `"pi": { "publish": true }` in `harness-kit.json`.
 
 `build` then adds these fields to every generated pi `package.json`:
 
@@ -355,8 +357,11 @@ npm accepts a trusted publisher only for a package that exists, so publish each 
 
 1. `npm login` (a session login; no token is stored).
 2. `npm publish ./plugins/<name>/pi --access public --provenance=false`. Provenance works only from CI.
-3. `npm trust github <piScope>/<name> --file <workflow>.yml --repo <owner>/<repo> --allow-publish`. This needs npm 11.15 or later and 2FA. Name your repo's workflow file that calls `release.yml`, not `release.yml` itself: npm checks the calling workflow.
+3. `npm trust github <package> --file <workflow>.yml --repo <owner>/<repo> --allow-publish`, with the pi package name from `plugins/<name>/pi/package.json`. This needs npm 11.15 or later and 2FA. Name your repo's workflow file that calls `release.yml`, not `release.yml` itself: npm checks the calling workflow.
 4. `npm logout`.
+
+> [!WARNING]
+> `publishPi` fails the release for any plugin whose package is not published and trusted yet: without a trusted publisher, npm has no way to authenticate. Publish every package by hand and run `npm trust github` for each one before you turn `npm-publish` on in the caller. A plugin that gets a pi tree later needs the same two steps before its first release.
 
 ### The workflow tag must match the package version
 

@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import type { Config } from "./config"
-import { type Plugin, prerequisiteData, readPlugins } from "./generate"
+import { piPackageName, type Plugin, prerequisiteData, readPlugins } from "./generate"
 import { PREREQS_DATA, PREREQS_MODULE, RUNTIME_DIR } from "./runtime"
 import { isRecord } from "./util"
 
@@ -137,15 +137,29 @@ export function piPackageProblems(dir: string): string[] {
   return problems
 }
 
-/** The `pi.extensions` list of a package, or undefined when its manifest cannot be read (`piPackageProblems` reports that). */
-function listedExtensions(dir: string): unknown[] | undefined {
+/** A package's parsed manifest, or undefined when it cannot be read (`piPackageProblems` reports that). */
+function readManifest(dir: string): Record<string, unknown> | undefined {
   try {
     const manifest: unknown = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
-    if (!isRecord(manifest) || !isRecord(manifest.pi)) return undefined
-    return Array.isArray(manifest.pi.extensions) ? manifest.pi.extensions : []
+    return isRecord(manifest) ? manifest : undefined
   } catch {
     return undefined
   }
+}
+
+/** The `pi.extensions` list of a package, or undefined when its manifest cannot be read. */
+function listedExtensions(dir: string): unknown[] | undefined {
+  const pi = readManifest(dir)?.pi
+  if (!isRecord(pi)) return undefined
+  return Array.isArray(pi.extensions) ? pi.extensions : []
+}
+
+/** A pi package's `name` must be the one the plugin's settings give, `piPackageName`. */
+export function piNameProblems(dir: string, plugin: Pick<Plugin, "name" | "piName">, config: Pick<Config, "piScope" | "piPrefix">): string[] {
+  const name = readManifest(dir)?.name
+  const expected = piPackageName(plugin, config)
+  if (typeof name !== "string" || name === "" || name === expected) return []
+  return [`package.json: "name" is ${JSON.stringify(name)}, but the plugin's pi package is "${expected}" ("piScope", then "piName" or "piPrefix" and the plugin name); run harness-kit build`]
 }
 
 /**
@@ -187,7 +201,7 @@ export function validatePi(root: string, config: Config): number {
   const problems = trees.flatMap((tree) => {
     const dir = path.join(root, tree)
     const plugin = plugins.get(path.basename(path.dirname(tree)))
-    const found = [...piPackageProblems(dir), ...(plugin ? prerequisiteProblems(dir, plugin) : [])]
+    const found = [...piPackageProblems(dir), ...(plugin ? [...piNameProblems(dir, plugin, config), ...prerequisiteProblems(dir, plugin)] : [])]
     return found.map((problem) => `${tree.split(path.sep).join("/")}/${problem}`)
   })
   for (const problem of problems) console.error(problem)

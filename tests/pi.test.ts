@@ -4,7 +4,7 @@ import path from "node:path"
 import { type Config, loadConfig } from "../src/config"
 import { drift, readPlugins, render, stampVersion, write } from "../src/generate"
 import { piAgent } from "../src/pi"
-import { piPackageProblems, validatePi } from "../src/validate-pi"
+import { piNameProblems, piPackageProblems, validatePi } from "../src/validate-pi"
 import { cleanup, fakePi, fixtureCopy } from "./helpers"
 
 let root: string
@@ -88,6 +88,71 @@ describe("pi package.json", () => {
     generate()
     stampVersion(root, "demo", "2.0.0", config)
     expect(readJson("pi/package.json").version).toBe("2.0.0")
+  })
+})
+
+describe("pi package name", () => {
+  const name = () => readJson("pi/package.json").name
+  const second = (own: Record<string, unknown>) => {
+    mkdirSync(path.join(root, "plugins", "second"), { recursive: true })
+    writeFileSync(path.join(root, "plugins", "second", "package.json"), JSON.stringify({ name: "second", version: "1.0.0", "agent-plugins": { description: "Second.", category: "c", harnesses: ["pi"], ...own } }))
+  }
+
+  test("is <piScope>/<plugin name> by default", () => {
+    generate()
+    expect(name()).toBe("@agent-plugins/demo")
+  })
+
+  test("piPrefix goes before the plugin name", () => {
+    config.piPrefix = "pi-"
+    generate()
+    expect(name()).toBe("@agent-plugins/pi-demo")
+    expect(validatePi(root, config)).toBe(0)
+  })
+
+  test("a plugin's piName replaces the prefix and the plugin name", () => {
+    config.piScope = "@srobroek"
+    config.piPrefix = "pi-"
+    editManifest((own) => (own.piName = "pi-external-repo-worker"))
+    generate()
+    expect(name()).toBe("@srobroek/pi-external-repo-worker")
+    expect(JSON.parse(readFileSync(path.join(root, "inventory.json"), "utf8")).plugins[0].piName).toBe("pi-external-repo-worker")
+    expect(validatePi(root, config)).toBe(0)
+  })
+
+  test("two plugins with one pi package name are an error, naming both", () => {
+    second({ piName: "demo" })
+    expect(() => readPlugins(root, config)).toThrow('plugins/second/package.json: pi package name "@agent-plugins/demo" is also the name of plugin "demo"; set a different "agent-plugins.piName"')
+  })
+
+  test("a piName that matches another plugin's prefixed name collides too", () => {
+    config.piPrefix = "pi-"
+    second({ piName: "pi-demo" })
+    expect(() => readPlugins(root, config)).toThrow(/pi package name "@agent-plugins\/pi-demo" is also the name of plugin "demo"/)
+  })
+
+  test.each([
+    ["capitals", "Pi-Demo"],
+    ["a scope", "@srobroek/pi-demo"],
+    ["a leading dot", ".pi-demo"],
+    ["a space", "pi demo"],
+  ])("a piName with %s is an error", (_label, piName) => {
+    editManifest((own) => (own.piName = piName))
+    expect(() => readPlugins(root, config)).toThrow(/plugins\/demo\/package\.json: "agent-plugins\.piName" must be an npm package name without a scope/)
+  })
+
+  test("a name longer than npm allows is an error", () => {
+    editManifest((own) => (own.piName = "p".repeat(200)))
+    expect(() => readPlugins(root, config)).toThrow(/is longer than npm's 214 characters/)
+  })
+
+  test("validate-pi reports a package name that differs from the settings", () => {
+    generate()
+    config.piPrefix = "pi-"
+    expect(piNameProblems(demo("pi"), readPlugins(root, config)[0] as never, config)).toEqual([
+      'package.json: "name" is "@agent-plugins/demo", but the plugin\'s pi package is "@agent-plugins/pi-demo" ("piScope", then "piName" or "piPrefix" and the plugin name); run harness-kit build',
+    ])
+    expect(validatePi(root, config)).toBe(1)
   })
 })
 
