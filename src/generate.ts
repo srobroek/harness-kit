@@ -31,7 +31,7 @@ import {
   vendoredSource,
 } from "./runtime"
 import { fail, httpUrl, isRecord, json, nonEmptyString } from "./util"
-import { enabledMcpServers, mcpServersForClaude, mcpServersForOmp, piMcpExtension, type McpServers } from "./mcp"
+import { mcpServersForClaude, mcpServersForOmp, piMcpExtension, type McpServers } from "./mcp"
 
 export type { Harness, Kind }
 export type HarnessInventory = Record<Kind, string[]>
@@ -894,7 +894,7 @@ function inventoryOf(root: string, plugin: Plugin, harness: Harness, generated: 
     if (pluginMcp !== undefined) mcp.push(...Object.keys(mcpServersForOmp(pluginMcp)))
   }
   if (harness === "claude" && pluginMcp !== undefined) mcp.push(...Object.keys(mcpServersForClaude(pluginMcp)))
-  if (harness === "pi" && files.includes("mcp-servers.ts")) mcp.push(...Object.keys(enabledMcpServers(pluginMcp ?? {})))
+  if (harness === "pi" && files.includes("mcp-servers.ts") && pluginMcp) mcp.push(...Object.keys(Object.fromEntries(Object.entries(pluginMcp).filter(([, server]) => server.enabled !== false))))
   const unique = (list: string[]) => [...new Set(list)].sort()
   const found: HarnessInventory = {
     skills: unique(skills),

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mcpServersForClaude, mcpServersForOmp, mcpServersForPi, piMcpExtension, type McpServers } from "../src/mcp"
+import { mcpServersForClaude, mcpServersForOmp, piMcpExtension, type McpServers } from "../src/mcp"
 
 const servers: McpServers = {
   enabled: { command: "server" },
@@ -9,18 +9,17 @@ const servers: McpServers = {
 }
 
 describe("MCP output policies", () => {
-  test("preserves keyless servers without optional headers and omits missing required credentials", () => {
-    const safe = { enabled: { command: "server" }, keyless: { command: "context7" } }
-    expect(mcpServersForClaude(servers, {})).toEqual(safe)
-    expect(mcpServersForOmp(servers, {})).toEqual(safe)
-    expect(mcpServersForClaude(servers, { API_KEY: "present" })).toHaveProperty("required")
-    expect(mcpServersForOmp(servers, { API_KEY: "present" })).toHaveProperty("required")
-    expect(mcpServersForPi(servers, {}).keyless).toEqual({ command: "context7" })
-    expect(mcpServersForPi(servers, { CONTEXT7_API_KEY: "present" }).keyless).toEqual({ command: "context7", headers: { CONTEXT7_API_KEY: "present" } })
-    expect(mcpServersForPi(servers, {}).required).toBeUndefined()
+  test("emits literal required placeholders and keyless servers independent of build credentials", () => {
+    const expected = {
+      enabled: { command: "server" },
+      keyless: { command: "context7" },
+      required: { command: "private-server", env: { API_KEY: "${API_KEY}" } },
+    }
+    expect(mcpServersForClaude(servers)).toEqual(expected)
+    expect(mcpServersForOmp(servers)).toEqual(expected)
   })
 
-  test("adds optional Pi headers only when present and gates required credentials", () => {
+  test("Pi adds optional headers at runtime and gates explicitly required keys", () => {
     const source = piMcpExtension(servers)
     expect(source).toContain('if (keys.some((key) => !process.env[key])) continue')
     expect(source).toContain('if (value) (config.headers ??= {})[header] = value')

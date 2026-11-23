@@ -8,14 +8,7 @@ export function requiredEnvironment(server: McpServer): string[] {
   return Array.isArray(server.requiredEnv) ? server.requiredEnv.filter((key): key is string => typeof key === "string") : []
 }
 
-function expandEnvironment(value: unknown, env: Record<string, string | undefined>): unknown {
-  if (typeof value === "string") return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, key: string) => env[key] ?? match)
-  if (Array.isArray(value)) return value.map((item) => expandEnvironment(item, env))
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, expandEnvironment(nested, env)]))
-  return value
-}
-
-function withoutAuthoringFields(server: McpServer, env: Record<string, string | undefined> = {}, includeOptionalHeaders = false): McpServer {
+function withoutAuthoringFields(server: McpServer): McpServer {
   const { enabled: _enabled, optionalHeaders: _optionalHeaders, requiredEnv: _requiredEnv, ...config } = server
   const optionalVariables = new Set(Object.values(server.optionalHeaders ?? {}).filter((value): value is string => typeof value === "string"))
   if (isRecord(config.headers)) {
@@ -25,43 +18,26 @@ function withoutAuthoringFields(server: McpServer, env: Record<string, string | 
       return !placeholders.some((key) => optionalVariables.has(key))
     }))
   }
-  const headers = isRecord(config.headers) ? { ...config.headers } : {}
-  if (includeOptionalHeaders) {
-    for (const [header, variable] of Object.entries(server.optionalHeaders ?? {})) {
-      if (typeof variable === "string" && env[variable]) headers[header] = env[variable]
-    }
-  }
-  if (Object.keys(headers).length > 0) config.headers = headers
-  else delete config.headers
-  return expandEnvironment(config, env) as McpServer
+  if (isRecord(config.headers) && Object.keys(config.headers).length === 0) delete config.headers
+  return config
 }
 
-function available(server: McpServer, env: Record<string, string | undefined>): boolean {
-  return server.enabled !== false && requiredEnvironment(server).every((key) => Boolean(env[key]))
-}
-
-export function mcpServersForClaude(servers: McpServers, env: Record<string, string | undefined> = process.env): McpServers {
+function staticallyEnabled(servers: McpServers): McpServers {
   return Object.fromEntries(Object.entries(servers)
-    .filter(([, server]) => available(server, env))
-    .map(([name, server]) => [name, withoutAuthoringFields(server, env)]))
+    .filter(([, server]) => server.enabled !== false)
+    .map(([name, server]) => [name, withoutAuthoringFields(server)]))
 }
 
-export function mcpServersForOmp(servers: McpServers, env: Record<string, string | undefined> = process.env): McpServers {
-  return Object.fromEntries(Object.entries(servers)
-    .filter(([, server]) => available(server, env))
-    .map(([name, server]) => [name, withoutAuthoringFields(server, {})]))
+export function mcpServersForClaude(servers: McpServers): McpServers {
+  return staticallyEnabled(servers)
 }
 
-export const enabledMcpServers = (servers: McpServers): McpServers =>
-  Object.fromEntries(Object.entries(servers).filter(([, server]) => server.enabled !== false).map(([name, server]) => [name, withoutAuthoringFields(server)]))
-export function mcpServersForPi(servers: McpServers, env: Record<string, string | undefined>): McpServers {
-  return Object.fromEntries(Object.entries(servers)
-    .filter(([, server]) => available(server, env))
-    .map(([name, server]) => [name, withoutAuthoringFields(server, env, true)]))
+export function mcpServersForOmp(servers: McpServers): McpServers {
+  return staticallyEnabled(servers)
 }
 
 export function piMcpExtension(servers: McpServers): string {
-  const active = enabledMcpServers(servers)
+  const active = staticallyEnabled(servers)
   const required = Object.fromEntries(Object.entries(servers)
     .filter(([, server]) => server.enabled !== false)
     .map(([name, server]) => [name, requiredEnvironment(server)])
@@ -77,7 +53,7 @@ export function piMcpExtension(servers: McpServers): string {
     `const optionalHeaders = ${json(optionalHeaders).trim()} as const`,
     "",
     "const expand = (value: unknown): unknown => {",
-    "  if (typeof value === \"string\") return value.replace(/\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}/g, (_match, key: string) => process.env[key] ?? \"\")",
+    "  if (typeof value === \"string\") return value.replace(/\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}/g, (match, key: string) => process.env[key] ?? match)",
     "  if (Array.isArray(value)) return value.map(expand)",
     "  if (value && typeof value === \"object\") return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, expand(nested)]))",
     "  return value",
@@ -96,5 +72,5 @@ export function piMcpExtension(servers: McpServers): string {
     "  }",
     "}",
     "",
-  ].join("\n")
+  ].join("\\n")
 }
