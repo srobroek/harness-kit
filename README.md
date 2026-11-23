@@ -54,6 +54,25 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun ins
 | `omp.packageType` | none | `"module"` or `"commonjs"`: adds `type` to the generated OMP `package.json`. |
 | `pi.publish` | `false` | `true` makes each generated pi `package.json` ready for npm. See "Publishing pi packages to npm". |
 
+### MCP servers
+
+Declare the shared MCP servers for a plugin in `plugins/<name>/common/.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "docs": { "command": "docs-mcp", "env": { "API_KEY": "${DOCS_API_KEY}" } },
+    "optional": { "command": "optional-mcp", "enabled": false }
+  }
+}
+```
+
+When referenced credentials are present, Pi expands them at runtime. OMP and Claude omit servers with optional credentials because their declarations cannot gate startup.
+
+`build` writes `omp/mcp.json`, `claude/.mcp.json` and `pi/mcp-servers.ts`. OMP and Claude omit disabled servers because their MCP declarations cannot conditionally register servers. Pi registers only enabled servers and skips servers with missing optional credentials.
+
+The generated `mcp` inventory lists server names per harness. `build --check` detects changes and stale MCP outputs. Pi packages include a generated extension that calls `pi.registerMcpServer`. See [Pi's MCP extension API](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md#mcp-servers).
+
 ### Plugin settings
 
 Each plugin's `package.json` carries `name` (equal to the directory), `version`, and the `agent-plugins` key (or your `pluginKey`) with `description`, `category`, `harnesses`, and optionally `scope`, `discrepancies`, `claudeName`, `options` or `userConfig`. Standard `author` and `license` fields go into the Claude manifest.

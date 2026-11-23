@@ -26,6 +26,40 @@ const readJson = (file: string) => JSON.parse(readFileSync(path.join(root, file)
 const read = (file: string) => readFileSync(path.join(root, file), "utf8")
 const demo = (file: string) => path.join("plugins", "demo", file)
 
+
+describe("MCP declarations", () => {
+  test("generates safe declarations per harness and check detects their drift", () => {
+    const manifestPath = path.join(root, demo("package.json"))
+    const manifest = readJson(demo("package.json"))
+    manifest["agent-plugins"].harnesses.push("pi")
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    const source = path.join(root, demo("common/.mcp.json"))
+    mkdirSync(path.dirname(source), { recursive: true })
+    writeFileSync(source, JSON.stringify({
+      mcpServers: {
+        enabled: { command: "enabled-server" },
+        disabled: { command: "disabled-server", enabled: false },
+        optional: { command: "optional-server", env: { API_KEY: "${OPTIONAL_API_KEY}" } },
+      },
+    }, null, 2) + "\n")
+    generate()
+    expect(readJson(demo("omp/mcp.json"))).toEqual({
+      $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+      mcpServers: { enabled: { command: "enabled-server" } },
+    })
+    expect(readJson(demo("claude/.mcp.json"))).toEqual({ $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", mcpServers: { enabled: { command: "enabled-server" } } })
+    expect(readJson(demo("omp/mcp.json")).mcpServers.enabled).not.toHaveProperty("enabled")
+    expect(readJson(demo("pi/package.json")).pi.extensions).toContain("./mcp-servers.ts")
+    expect(readJson("inventory.json").plugins[0].harnesses.omp.mcp).toEqual(["enabled"])
+    expect(readJson("inventory.json").plugins[0].harnesses.pi.mcp).toEqual(["enabled", "optional"])
+    expect(staleFiles().filter((file) => file.endsWith("mcp.json") || file.endsWith("mcp-servers.ts"))).toEqual([])
+    writeFileSync(path.join(root, demo("omp/mcp.json")), "{}\n")
+    expect(staleFiles()).toContain(demo("omp/mcp.json"))
+    rmSync(source)
+    expect(staleFiles().filter((file) => file.endsWith("mcp.json") || file.endsWith("mcp-servers.ts"))).toEqual([demo("claude/.mcp.json"), demo("pi/mcp-servers.ts")].sort())
+  })
+})
+
 describe("harness manifests", () => {
   test("claude plugin.json takes name, description and version from package.json", () => {
     generate()
