@@ -307,8 +307,14 @@ describe("pi rule triggers", () => {
       expect(pi.emit("tool_result", { toolCallId: "2", content: [output] })).toEqual([undefined])
     })
 
-    test("a rule without interruptMode does not block", () => {
-      const pi = load({ "rules/hint.md": NO_FROB.replace("interruptMode: always\n", "") })
+    test("a rule without interruptMode blocks, as OMP's default is always", () => {
+      const pi = load({ "rules/no-frob.md": NO_FROB.replace("interruptMode: always\n", "") })
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "1"))[0]).toMatchObject({ block: true })
+      expect(pi.emit("tool_call", bash("frobnicate-edit x", "2"))).toEqual([undefined])
+    })
+
+    test("appending the rule to a result keeps the result's structured content", () => {
+      const pi = load({ "rules/hint.md": NO_FROB.replace("interruptMode: always", "interruptMode: never") })
       expect(pi.emit("tool_call", bash("frobnicate-edit x", "1"))).toEqual([undefined])
       expect(pi.emit("tool_result", { toolCallId: "1", content: [], structuredContent: { kept: true } })[0]).toMatchObject({ structuredContent: { kept: true } })
     })

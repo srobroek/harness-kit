@@ -13,8 +13,8 @@ import { fileURLToPath } from "node:url"
  * A rule with OMP's trigger front matter (`condition`, `scope`, `interruptMode`) also fires, at most once per session:
  * - Tool scopes (`tool:bash`, `tool:edit`, `tool:write`, `tool:read`, each optionally `(<glob>)`; `tool` for all four):
  *   a call whose command, new text, content or path matches a condition, and whose path matches the glob, is blocked
- *   with the rule as the reason when the rule interrupts (`always`, `tool-only`). The model can retry it. Otherwise the
- *   rule is appended to that call's result.
+ *   with the rule as the reason when the rule interrupts (`always`, the default as in OMP, or `tool-only`). The model
+ *   can retry it. Otherwise the rule is appended to that call's result.
  * - `text` and `thinking`: a streamed reply or reasoning that matches gets the rule as a steering message. pi delivers a
  *   steer after the current turn's tool calls; aborting would return the queued message to the editor instead of
  *   starting a turn, so an interrupting rule steers without aborting.
@@ -308,7 +308,7 @@ function compileTrigger({ values, errors }: Fields): { trigger?: Trigger; proble
 	if (conditions.length === 0) return {}
 
 	const scope = values.scope === undefined ? ["text", "tool"] : typeof values.scope === "string" ? scopeTokens(values.scope) : values.scope.flatMap(scopeTokens)
-	const trigger: Trigger = { conditions, tools: [], text: false, thinking: false, interrupt: "never" }
+	const trigger: Trigger = { conditions, tools: [], text: false, thinking: false, interrupt: "always" }
 	for (const token of scope) {
 		const tool = /^tool:([\w-]+)(?:\((.*)\))?$/.exec(token)
 		if (token === "text" || token === "thinking") trigger[token] = true
@@ -318,8 +318,9 @@ function compileTrigger({ values, errors }: Fields): { trigger?: Trigger; proble
 		}
 	}
 	if (!trigger.text && !trigger.thinking && trigger.tools.length === 0) return {}
+	// A missing or unknown interruptMode keeps OMP's default, `always`, so a rule file acts the same in both harnesses.
 	const mode = values.interruptMode
-	if (mode === "always" || mode === "prose-only" || mode === "tool-only") trigger.interrupt = mode
+	if (mode === "never" || mode === "prose-only" || mode === "tool-only") trigger.interrupt = mode
 	return { trigger }
 }
 
