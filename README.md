@@ -67,6 +67,7 @@ Each plugin's `package.json` carries `name` (equal to the directory), `version`,
 - `options` (name to `{ description, default }`) become a Claude `userConfig` and an `options.json` in every harness tree.
 - `userConfig` is copied into the Claude manifest as is. Setting both `options` and `userConfig` is an error.
 - `prerequisites` lists the external CLIs the plugin needs. See "Prerequisites".
+- `companions` lists the pi packages the plugin works with. See "Companions".
 - `common/<dir>/x.<harness>.md` replaces `x.md` in that harness only.
 - An OMP or pi rule with no front matter gets `alwaysApply: true`. A rule with its own front matter, such as `description:`, is copied unchanged.
 - `__pycache__` directories are ignored.
@@ -192,6 +193,30 @@ With `install.npm` set, the check looks in `node_modules/.bin` before `PATH`: fi
 
 Some tools are not npm packages, so they cannot be dependencies: bd, wt, chezmoi, fnox, uv, gh and python3, for example. For them, the check and its install hint are the only route.
 
+### Companions
+
+An agent package's prompts may refer to skills that other pi packages ship. Someone who installs it alone then gets prompts that point at missing skills. A plugin names those packages in its `agent-plugins` key:
+
+```json
+"companions": [
+  { "package": "@srobroek/pi-code-quality", "for": "the quality skills the prompts refer to", "required": true },
+  { "package": "@srobroek/pi-language-packs", "for": "language skills", "range": "^1.0.0" }
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `package` | required | The npm name of the pi package, scoped or not. Not one that pi supplies, and not the plugin's own. |
+| `for` | required | One line on what the plugin uses it for. |
+| `required` | `false` | The plugin's gates need the package to work. |
+| `range` | `*` | The semver range of the package in a published `peerDependencies`. |
+
+The pi tree uses the list in three places. OpenCode, Claude and OMP trees do not, because they install no pi packages:
+
+1. `pi/README.md` gets a "Works with" table: each package, whether it is required, what it is for, and `pi install npm:<package>`. It follows the plugin's own `README.md`. A plugin without one gets a heading with the pi package name and its description first. Dropping `companions` leaves the README in place when `pi.publish` is off; delete it by hand.
+2. With `pi.publish` on, `pi/package.json` lists each companion in `peerDependencies` at its range, and as optional in `peerDependenciesMeta`.
+3. The prerequisite check (`_kit/prereqs.ts`) is vendored for companions too. At `session_start` it reads the `packages` of pi's settings in the agent directory (`$PI_CODING_AGENT_DIR/settings.json`, default `~/.pi/agent/settings.json`) and in the project (`.pi/settings.json`). An entry `npm:<package>`, with or without `@<version>`, counts as installed, and so does a local path whose `package.json` has the companion's name. A git source does not count, because its name is not known without the clone. Each missing companion goes into the same notice as the missing tools, with its install command. `missingRequired()` and `prereqMessage(name)` cover required companions.
+
 ### The pi target
 
 [pi](https://pi.dev) installs a plugin as a pi package: `pi install ./plugins/<name>/pi`, or an npm or git source. A plugin that lists `pi` in its `harnesses` gets a `plugins/<name>/pi/` tree, built like the OMP tree:
@@ -234,7 +259,7 @@ Some tools are not npm packages, so they cannot be dependencies: bd, wt, chezmoi
   - a skill without a `SKILL.md`, or a `SKILL.md` without a description
   - an extension that does not parse, or that has no default export
   - an agent whose front matter is not YAML, or that lacks `name` or `description`
-  - with `prerequisites` declared, a missing `_kit/prereqs.ts`, a `pi.extensions` that does not list it, or a `_kit/prereqs.json` that differs from the list in the plugin's `package.json`; without them, either file left over
+  - with `prerequisites` or `companions` declared, a missing `_kit/prereqs.ts`, a `pi.extensions` that does not list it, or a `_kit/prereqs.json` that differs from the lists in the plugin's `package.json`; without them, either file left over
 
 ## Commands
 
@@ -335,7 +360,8 @@ A repo can publish each plugin's pi tree as an npm package, installed with `pi i
 | `files` | Every top-level entry of the tree except `package.json`, `node_modules` and dot-entries: `extensions`, `_kit`, the `commonDirs` copies, `options.json`, `README.md`, `CHANGELOG.md` and `LICENSE`, as present. A file you put in the pi tree ships too. |
 | `publishConfig` | `{ "access": "public", "provenance": true }` |
 | `dependencies` | The package and range of each prerequisite's `install.npm`, by name: `"repomix@^1.2.0"` gives `"repomix": "^1.2.0"`. Two ranges for one package, or a package that pi supplies, are errors. |
-| `peerDependencies` | `"*"` for each host package that the tree's own modules import: `@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui` and `typebox`. pi supplies them, so they are never in `dependencies`. |
+| `peerDependencies` | `"*"` for each host package that the tree's own modules import: `@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui` and `typebox`. pi supplies them, so they are never in `dependencies`. Each companion, at its `range`. Sorted by name. |
+| `peerDependenciesMeta` | `{ "optional": true }` for each companion. |
 
 The tree also gets copies of the plugin's `README.md` and `CHANGELOG.md` and of the repo's `LICENSE`, when they exist. pi shows a package's `CHANGELOG.md` after an update. `build --check` catches a stale copy. A copy whose source goes away is removed. Turning `pi.publish` off leaves the copies in place; delete them by hand. The generated `package.json` has no `private`, and `dependencies` only from npm prerequisites.
 

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { accessSync, constants, readFileSync, statSync } from "node:fs"
-import { delimiter, dirname, isAbsolute, join } from "node:path"
+import { homedir } from "node:os"
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 /**
@@ -13,12 +14,17 @@ import { fileURLToPath } from "node:url"
  * (`install.npm`). With a `version` range it runs `<bin> --version` (2 s timeout) and compares the first version-looking
  * token of the output. The check runs once per process, and the result is cached.
  *
- * Every tool that is missing, too old, or whose version cannot be read goes into one notice. A session with a UI gets it
- * as a warning through `ctx.ui.notify`. Without a UI, one line goes to stderr, at most once per process, and not after a
- * UI notice: in OMP, subagent sessions have no UI and share the process. When every tool is present, nothing is reported.
+ * A pi tree's list may also name companions: pi packages the plugin works with, such as the skill packs its prompts
+ * refer to. A companion counts as installed when a `packages` entry of pi's settings names it: `npm:<name>[@version]`,
+ * or a local directory whose package.json has that name. Both the agent directory's `settings.json`
+ * (`$PI_CODING_AGENT_DIR`, default `~/.pi/agent`) and the project's `.pi/settings.json` count.
  *
- * A gate extension of the plugin fails closed with `missingRequired()` and `prereqMessage(bin)`, imported from
- * `../_kit/prereqs.ts`:
+ * Every tool that is missing, too old, or whose version cannot be read, and every companion that is not installed, goes
+ * into one notice. A session with a UI gets it as a warning through `ctx.ui.notify`. Without a UI, one line goes to
+ * stderr, at most once per process, and not after a UI notice: in OMP, subagent sessions have no UI and share the
+ * process. When nothing is missing, nothing is reported.
+ * A gate extension of the plugin fails closed with `missingRequired()` and `prereqMessage(name)`, imported from
+ * `../_kit/prereqs.ts`. Both cover required tools and required companions:
  *
  *     const missing = missingRequired()
  *     if (missing.length > 0) return { block: true, reason: missing.map((bin) => prereqMessage(bin)).join("\n") }
@@ -43,10 +49,23 @@ export interface Prerequisite {
 	version?: string
 }
 
+/** A pi package the plugin works with, such as a skill pack its prompts refer to. */
+export interface Companion {
+	/** The npm package name, scoped or not. */
+	package: string
+	/** What the plugin uses it for, shown in the notice. */
+	for: string
+	required: boolean
+	/** The range a published package gives it in `peerDependencies`; the check does not compare versions. */
+	range?: string
+}
+
 /** The contents of `_kit/prereqs.json`. */
 export interface Manifest {
 	plugin: string
 	prerequisites: Prerequisite[]
+	/** Only a pi tree's list has companions. */
+	companions?: Companion[]
 }
 
 /** An unmet prerequisite: not found, or a version that does not satisfy the range (`found` is absent when unreadable). */
@@ -62,12 +81,15 @@ export interface Deps {
 	/** The package tree holding `_kit/prereqs.json`; defaults to the parent of the `_kit` directory. */
 	root?: string
 	env?: Env
+	/** The project whose `.pi/settings.json` counts; defaults to the session's cwd, or the process's. */
+	cwd?: string
 	/** Writes the notice of a session without a UI; defaults to one line on stderr. */
 	stderr?: (line: string) => void
 }
 
 interface Context {
 	hasUI: boolean
+	cwd?: string
 	ui: { notify(message: string, type: "warning"): void }
 }
 
@@ -223,56 +245,129 @@ export function describeFinding({ prerequisite, problem, found }: Finding): stri
 	return `${prerequisite.bin} (${prerequisite.required ? "required, " : ""}for ${prerequisite.for}): ${wrong}; install: ${installHint(prerequisite.install)}`
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
+
+/** `npm:<name>` or `npm:<name>@<version>`, scoped or not. */
+const NPM_SOURCE = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@.*)?$/
+/** A source with a scheme, such as `git:` or `https:`, which names no package without fetching it. */
+const SCHEME = /^[a-z][a-z0-9+.-]+:/i
+
+/** pi's agent directory: `$PI_CODING_AGENT_DIR`, else `~/.pi/agent`. */
+export function piAgentDir(env: Env): string {
+	const custom = env.PI_CODING_AGENT_DIR?.trim()
+	return custom ? custom : join(env.HOME ?? homedir(), ".pi", "agent")
+}
+
+function packageNameAt(dir: string): string | undefined {
+	try {
+		const manifest: unknown = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"))
+		return isObject(manifest) && typeof manifest.name === "string" ? manifest.name : undefined
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * The package names a pi settings file installs: each `packages` entry (a string, or an object's `source`) that is
+ * `npm:<name>[@version]`, or a local path, relative to the file, whose package.json has a name. A missing or unreadable
+ * file installs nothing.
+ */
+export function installedPackages(file: string, env: Env): string[] {
+	let settings: unknown
+	try {
+		settings = JSON.parse(readFileSync(file, "utf8"))
+	} catch {
+		return []
+	}
+	const packages = isObject(settings) && Array.isArray(settings.packages) ? settings.packages : []
+	return packages.flatMap((entry) => {
+		const source = typeof entry === "string" ? entry : isObject(entry) && typeof entry.source === "string" ? entry.source : undefined
+		if (!source) return []
+		const npm = NPM_SOURCE.exec(source)
+		if (npm) return [npm[1] as string]
+		if (SCHEME.test(source)) return []
+		const local = source.startsWith("~/") ? join(env.HOME ?? homedir(), source.slice(2)) : resolve(dirname(file), source)
+		const name = packageNameAt(local)
+		return name ? [name] : []
+	})
+}
+
+/** The companions of a manifest that neither the agent directory's nor the project's pi settings install. */
+export function missingCompanions(manifest: Manifest, cwd: string, env: Env): Companion[] {
+	const companions = manifest.companions ?? []
+	if (companions.length === 0) return []
+	const settings = [join(piAgentDir(env), "settings.json"), join(cwd, ".pi", "settings.json")]
+	const installed = new Set(settings.flatMap((file) => installedPackages(file, env)))
+	return companions.filter((companion) => !installed.has(companion.package))
+}
+
+/** One missing companion: what it is for and how to install it. */
+export function describeCompanion(companion: Companion): string {
+	return `${companion.package} (${companion.required ? "required, " : ""}for ${companion.for}): not installed; install: pi install npm:${companion.package}`
+}
+
 const defaultRoot = () => join(dirname(fileURLToPath(import.meta.url)), "..")
 
-const cache = new Map<string, { manifest: Manifest; findings: Finding[] }>()
+type Status = { manifest: Manifest; findings: Finding[]; companions: Companion[] }
+
+const cache = new Map<string, Status>()
 /** Packages whose notice this process has shown or written. */
 const reported = new Set<string>()
 
-/** The manifest and its unmet prerequisites, checked once per package root and PATH in this process. */
-function status(deps: Deps): { manifest: Manifest; findings: Finding[] } {
+/** The manifest, its unmet prerequisites and its missing companions, checked once per package root, PATH, project and agent directory in this process. */
+function status(deps: Deps): Status {
 	const root = deps.root ?? defaultRoot()
 	const env = deps.env ?? process.env
-	const key = `${root}\0${env.PATH ?? ""}`
+	const cwd = deps.cwd ?? process.cwd()
+	const key = [root, env.PATH ?? "", cwd, piAgentDir(env)].join("\0")
 	let entry = cache.get(key)
 	if (!entry) {
 		const manifest = JSON.parse(readFileSync(join(root, "_kit", "prereqs.json"), "utf8")) as Manifest
-		entry = { manifest, findings: check(manifest, root, env) }
+		entry = { manifest, findings: check(manifest, root, env), companions: missingCompanions(manifest, cwd, env) }
 		cache.set(key, entry)
 	}
 	return entry
 }
 
-/** The bins of required prerequisites that are missing, too old, or of unreadable version. Gates block on a non-empty list. */
+/**
+ * The bins of required prerequisites that are missing, too old, or of unreadable version, then the packages of required
+ * companions that are not installed. Gates block on a non-empty list.
+ */
 export function missingRequired(deps: Deps = {}): string[] {
-	return status(deps)
-		.findings.filter((finding) => finding.prerequisite.required)
-		.map((finding) => finding.prerequisite.bin)
+	const { findings, companions } = status(deps)
+	return [
+		...findings.filter((finding) => finding.prerequisite.required).map((finding) => finding.prerequisite.bin),
+		...companions.filter((companion) => companion.required).map((companion) => companion.package),
+	]
 }
 
-/** The message a gate gives for one declared prerequisite: what is wrong with it and how to install it. */
-export function prereqMessage(bin: string, deps: Deps = {}): string {
-	const { manifest, findings } = status(deps)
-	const prerequisite = manifest.prerequisites.find((item) => item.bin === bin)
-	if (!prerequisite) throw new Error(`${manifest.plugin} declares no prerequisite "${bin}"`)
-	const finding = findings.find((item) => item.prerequisite.bin === bin)
-	return finding ? `${manifest.plugin} needs ${describeFinding(finding)}` : `${manifest.plugin}: ${bin} is available`
+/** The message a gate gives for one declared prerequisite (by bin) or companion (by package): what is wrong and how to install it. */
+export function prereqMessage(name: string, deps: Deps = {}): string {
+	const { manifest, findings, companions } = status(deps)
+	const finding = findings.find((item) => item.prerequisite.bin === name)
+	if (finding) return `${manifest.plugin} needs ${describeFinding(finding)}`
+	const companion = companions.find((item) => item.package === name)
+	if (companion) return `${manifest.plugin} needs ${describeCompanion(companion)}`
+	const declared = manifest.prerequisites.some((item) => item.bin === name) || (manifest.companions ?? []).some((item) => item.package === name)
+	if (!declared) throw new Error(`${manifest.plugin} declares no prerequisite or companion "${name}"`)
+	return `${manifest.plugin}: ${name} is available`
 }
 
 export default function prereqsExtension(pi: Api, deps: Deps = {}): void {
 	const stderr = deps.stderr ?? ((line: string) => void process.stderr.write(`${line}\n`))
 	pi.on("session_start", (_event, ctx) => {
-		const { manifest, findings } = status(deps)
-		if (findings.length === 0) return
+		const { manifest, findings, companions } = status({ ...deps, cwd: deps.cwd ?? ctx.cwd })
+		const lines = [...findings.map(describeFinding), ...companions.map(describeCompanion)]
+		if (lines.length === 0) return
 		const heading = `${manifest.plugin}: prerequisites not met`
 		const key = deps.root ?? defaultRoot()
 		if (ctx.hasUI) {
 			reported.add(key)
-			ctx.ui.notify([`${heading}:`, ...findings.map((finding) => `- ${describeFinding(finding)}`)].join("\n"), "warning")
+			ctx.ui.notify([`${heading}:`, ...lines.map((line) => `- ${line}`)].join("\n"), "warning")
 			return
 		}
 		if (reported.has(key)) return
 		reported.add(key)
-		stderr(`${heading}: ${findings.map(describeFinding).join("; ")}`)
+		stderr(`${heading}: ${lines.join("; ")}`)
 	})
 }

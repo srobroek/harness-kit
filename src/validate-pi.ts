@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import type { Config } from "./config"
-import { piPackageName, type Plugin, prerequisiteData, readPlugins } from "./generate"
+import { hasPrerequisiteCheck, piPackageName, type Plugin, prerequisiteData, readPlugins } from "./generate"
 import { PREREQS_DATA, PREREQS_MODULE, RUNTIME_DIR } from "./runtime"
 import { isRecord } from "./util"
 
@@ -163,26 +163,31 @@ export function piNameProblems(dir: string, plugin: Pick<Plugin, "name" | "piNam
 }
 
 /**
- * Problems with the prerequisite check of one pi package, against the plugin's `prerequisites`: a declaring plugin needs
- * `_kit/prereqs.ts`, listed as an extension, and a `_kit/prereqs.json` equal to its list; a plugin without them, neither file.
+ * Problems with the prerequisite check of one pi package, against the plugin's `prerequisites` and `companions`: a
+ * declaring plugin needs `_kit/prereqs.ts`, listed as an extension, and a `_kit/prereqs.json` equal to its lists; a
+ * plugin without them, neither file.
  */
-export function prerequisiteProblems(dir: string, plugin: Pick<Plugin, "name" | "prerequisites">): string[] {
+export function prerequisiteProblems(dir: string, plugin: Pick<Plugin, "name" | "prerequisites" | "companions">): string[] {
   const module = `${RUNTIME_DIR}/${PREREQS_MODULE}`
   const data = `${RUNTIME_DIR}/${PREREQS_DATA}`
   const present = (file: string) => existsSync(path.join(dir, file))
-  if (!plugin.prerequisites) return [module, data].filter(present).map((file) => `${file}: the plugin declares no prerequisites; run harness-kit build to remove it`)
+  if (!hasPrerequisiteCheck(plugin, "pi")) {
+    return [module, data].filter(present).map((file) => `${file}: the plugin declares no prerequisites or companions; run harness-kit build to remove it`)
+  }
   const problems: string[] = []
-  if (!present(module)) problems.push(`${module}: missing, but the plugin declares prerequisites; run harness-kit build`)
+  if (!present(module)) problems.push(`${module}: missing, but the plugin declares prerequisites or companions; run harness-kit build`)
   const extensions = listedExtensions(dir)
   if (extensions && !extensions.includes(`./${module}`)) problems.push(`package.json: "pi.extensions" must list "./${module}", or pi does not run the prerequisite check`)
-  if (!present(data)) return [...problems, `${data}: missing, but the plugin declares prerequisites; run harness-kit build`]
+  if (!present(data)) return [...problems, `${data}: missing, but the plugin declares prerequisites or companions; run harness-kit build`]
   let listed: unknown
   try {
     listed = JSON.parse(readFileSync(path.join(dir, data), "utf8"))
   } catch (error) {
     return [...problems, `${data}: not valid JSON (${error instanceof Error ? error.message : String(error)})`]
   }
-  if (!isDeepStrictEqual(listed, prerequisiteData(plugin))) problems.push(`${data}: does not match "prerequisites" in plugins/${plugin.name}/package.json; run harness-kit build`)
+  if (!isDeepStrictEqual(listed, prerequisiteData(plugin, "pi"))) {
+    problems.push(`${data}: does not match "prerequisites" and "companions" in plugins/${plugin.name}/package.json; run harness-kit build`)
+  }
   return problems
 }
 

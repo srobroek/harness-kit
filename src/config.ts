@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 // The prerequisite check's own types and range grammar, so the generator accepts exactly what the vendored module reads.
-import { type Prerequisite, parseRange } from "../runtime/pi/prereqs"
+import { type Companion, type Prerequisite, parseRange } from "../runtime/pi/prereqs"
 import { fail, httpUrl, isRecord, nonEmptyString } from "./util"
 
 export const CONFIG_FILE = "harness-kit.json"
@@ -65,10 +65,13 @@ function onlyKeys(where: string, field: string, value: Record<string, unknown>, 
   if (unknown.length > 0) fail(where, `unknown key${unknown.length > 1 ? "s" : ""} ${unknown.map((k) => `"${field}${k}"`).join(", ")} (allowed: ${allowed.join(", ")})`)
 }
 
-export type { Prerequisite }
+export type { Companion, Prerequisite }
 
 const BIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
-const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(.+)$/
+/** An npm package name, scoped or not. */
+const PACKAGE_NAME = "(?:@[a-z0-9][a-z0-9._-]*\\/)?[a-z0-9][a-z0-9._-]*"
+const NPM_PACKAGE = new RegExp(`^${PACKAGE_NAME}$`)
+const NPM_SPEC = new RegExp(`^(${PACKAGE_NAME})@(.+)$`)
 
 /** The package and range of an `install.npm` spec such as `repomix@^1.2.0`; undefined when it is not one. */
 export function npmSpec(spec: string): { name: string; range: string } | undefined {
@@ -128,6 +131,31 @@ export function readPrerequisites(where: string, field: string, raw: unknown): P
     const prerequisite: Prerequisite = { bin, for: purpose, required: item.required === true, install }
     if (item.version !== undefined) prerequisite.version = versionRange(where, `${at}.version`, item.version)
     return prerequisite
+  })
+}
+
+/**
+ * Validate a plugin's `companions` list (pi packages it works with) and fill in `required: false`. `field` is the key
+ * path errors name, such as `agent-plugins.companions`. Keys come back in one order.
+ */
+export function readCompanions(where: string, field: string, raw: unknown): Companion[] | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.length === 0) fail(where, `"${field}" must be a non-empty list of { package, for } objects`)
+  const seen = new Set<string>()
+  return raw.map((item: unknown, index): Companion => {
+    const at = `${field}[${index}]`
+    if (!isRecord(item)) fail(where, `"${at}" must be an object with package and for`)
+    onlyKeys(where, `${at}.`, item, ["package", "for", "required", "range"])
+    const name = nonEmptyString(where, `${at}.package`, item.package)
+    if (!NPM_PACKAGE.test(name) || name.length > NPM_NAME_MAX) fail(where, `"${at}.package" must be an npm package name, such as "@scope/pi-tools", got ${JSON.stringify(name)}`)
+    if (seen.has(name)) fail(where, `"${field}" lists "${name}" twice`)
+    seen.add(name)
+    const purpose = nonEmptyString(where, `${at}.for`, item.for)
+    if (/[\r\n]/.test(purpose)) fail(where, `"${at}.for" must be one line`)
+    if (item.required !== undefined && typeof item.required !== "boolean") fail(where, `"${at}.required" must be true or false`)
+    const companion: Companion = { package: name, for: purpose, required: item.required === true }
+    if (item.range !== undefined) companion.range = versionRange(where, `${at}.range`, item.range)
+    return companion
   })
 }
 

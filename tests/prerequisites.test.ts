@@ -205,7 +205,7 @@ describe("the prerequisite check", () => {
     expect(missingRequired(deps)).toEqual(["gatekeeper"])
     expect(prereqMessage("gatekeeper", deps)).toBe("demo needs gatekeeper (required, for the commit gate): not on PATH; install: mise use -g aqua:o/gatekeeper")
     expect(prereqMessage("bd", deps)).toBe("demo: bd is available")
-    expect(() => prereqMessage("nope", deps)).toThrow('demo declares no prerequisite "nope"')
+    expect(() => prereqMessage("nope", deps)).toThrow('demo declares no prerequisite or companion "nope"')
   })
 
   test("an npm prerequisite in the package's own or a hoisted node_modules/.bin counts as present; other tools are looked up on PATH only", () => {
@@ -335,7 +335,7 @@ describe("generated prerequisite check", () => {
     })
 
     test.each([
-      ["a list that differs from the metadata", () => writeFileSync(demo("pi/_kit/prereqs.json"), JSON.stringify({ plugin: "demo", prerequisites: [BD] })), '_kit/prereqs.json: does not match "prerequisites" in plugins/demo/package.json'],
+      ["a list that differs from the metadata", () => writeFileSync(demo("pi/_kit/prereqs.json"), JSON.stringify({ plugin: "demo", prerequisites: [BD] })), '_kit/prereqs.json: does not match "prerequisites" and "companions" in plugins/demo/package.json'],
       ["a list that is not JSON", () => writeFileSync(demo("pi/_kit/prereqs.json"), "{"), "_kit/prereqs.json: not valid JSON"],
       ["a missing list", () => rmSync(demo("pi/_kit/prereqs.json")), "_kit/prereqs.json: missing, but the plugin declares prerequisites"],
       ["a missing module", () => rmSync(demo("pi/_kit/prereqs.ts")), "_kit/prereqs.ts: missing, but the plugin declares prerequisites"],
@@ -355,8 +355,8 @@ describe("generated prerequisite check", () => {
       generate()
       editOwn((own) => delete own.prerequisites)
       expect(problems()).toEqual([
-        "_kit/prereqs.ts: the plugin declares no prerequisites; run harness-kit build to remove it",
-        "_kit/prereqs.json: the plugin declares no prerequisites; run harness-kit build to remove it",
+        "_kit/prereqs.ts: the plugin declares no prerequisites or companions; run harness-kit build to remove it",
+        "_kit/prereqs.json: the plugin declares no prerequisites or companions; run harness-kit build to remove it",
       ])
     })
   })
