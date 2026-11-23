@@ -51,7 +51,6 @@ describe("MCP declarations", () => {
     try {
       expect(output().map((item) => item.contents).join("\n")).toBe(withoutBuildKey)
       expect(output().map((item) => item.contents).join("\n")).not.toContain("must-not-be-written")
-      expect(readJson(demo("omp/mcp.json")).mcpServers.required.env.API_KEY).toBe("${API_KEY}")
       expect(readJson(demo("claude/.mcp.json")).mcpServers.required.env.API_KEY).toBe("${API_KEY}")
     } finally {
       if (previous === undefined) delete process.env.API_KEY
@@ -59,7 +58,7 @@ describe("MCP declarations", () => {
     }
     expect(staleFiles().filter((file) => file.endsWith("mcp.json") || file.endsWith("mcp-servers.ts"))).toEqual([])
     expect(readJson(demo("pi/package.json")).pi.extensions).toContain("./mcp-servers.ts")
-    expect(readJson("inventory.json").plugins[0].harnesses.omp.mcp).toEqual(["enabled", "keyless", "required"])
+    expect(readJson("inventory.json").plugins[0].harnesses.omp.mcp).toEqual(["enabled", "keyless"])
     writeFileSync(path.join(root, demo("omp/mcp.json")), "{}\n")
     expect(staleFiles()).toContain(demo("omp/mcp.json"))
     rmSync(source)

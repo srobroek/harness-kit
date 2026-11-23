@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { mcpServersForClaude, mcpServersForOmp, piMcpExtension, type McpServers } from "../src/mcp"
 
 const servers: McpServers = {
@@ -8,24 +12,52 @@ const servers: McpServers = {
   required: { command: "private-server", env: { API_KEY: "${API_KEY}" }, requiredEnv: ["API_KEY"] },
 }
 
+const scratch: string[] = []
+afterEach(() => {
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
 describe("MCP output policies", () => {
-  test("emits literal required placeholders and keyless servers independent of build credentials", () => {
-    const expected = {
+  test("preserves required placeholders for Claude but omits required servers from OMP", () => {
+    expect(mcpServersForClaude(servers)).toEqual({
       enabled: { command: "server" },
       keyless: { command: "context7" },
       required: { command: "private-server", env: { API_KEY: "${API_KEY}" } },
-    }
-    expect(mcpServersForClaude(servers)).toEqual(expected)
-    expect(mcpServersForOmp(servers)).toEqual(expected)
+    })
+    expect(mcpServersForOmp(servers)).toEqual({ enabled: { command: "server" }, keyless: { command: "context7" } })
   })
 
-  test("Pi adds optional headers at runtime and gates explicitly required keys", () => {
-    const source = piMcpExtension(servers)
-    expect(source).toContain('if (keys.some((key) => !process.env[key])) continue')
-    expect(source).toContain('if (value) (config.headers ??= {})[header] = value')
-    expect(source).toContain('"CONTEXT7_API_KEY": "CONTEXT7_API_KEY"')
-    expect(source).toContain('"required": [\n    "API_KEY"')
-    expect(source).not.toContain('"disabled":')
-    expect(source).not.toContain('"optionalHeaders":')
+  test("executes the generated Pi extension with missing and present credentials", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "harness-kit-pi-mcp-"))
+    scratch.push(dir)
+    const source = path.join(dir, "extension.ts")
+    const module = path.join(dir, "extension.mjs")
+    writeFileSync(source, piMcpExtension(servers))
+    const compile = Bun.spawnSync([process.execPath, "build", source, "--outfile", module])
+    expect(compile.exitCode).toBe(0)
+    const { default: register } = await import(`${pathToFileURL(module).href}?${Date.now()}`)
+    const previousKey = process.env.API_KEY
+    const previousContext7 = process.env.CONTEXT7_API_KEY
+    try {
+      delete process.env.API_KEY
+      delete process.env.CONTEXT7_API_KEY
+      const withoutCredentials: Array<[string, Record<string, unknown>]> = []
+      register({ registerMcpServer: (name: string, config: Record<string, unknown>) => withoutCredentials.push([name, config]) })
+      expect(withoutCredentials.map(([name]) => name)).toEqual(["enabled", "keyless"])
+      expect(withoutCredentials.find(([name]) => name === "keyless")?.[1]).toEqual({ command: "context7" })
+
+      process.env.API_KEY = "private-secret"
+      process.env.CONTEXT7_API_KEY = "context7-secret"
+      const withCredentials: Array<[string, Record<string, unknown>]> = []
+      register({ registerMcpServer: (name: string, config: Record<string, unknown>) => withCredentials.push([name, config]) })
+      expect(withCredentials.map(([name]) => name)).toEqual(["enabled", "keyless", "required"])
+      expect(withCredentials.find(([name]) => name === "keyless")?.[1]).toEqual({ command: "context7", headers: { CONTEXT7_API_KEY: "context7-secret" } })
+      expect(withCredentials.find(([name]) => name === "required")?.[1]).toEqual({ command: "private-server", env: { API_KEY: "private-secret" } })
+    } finally {
+      if (previousKey === undefined) delete process.env.API_KEY
+      else process.env.API_KEY = previousKey
+      if (previousContext7 === undefined) delete process.env.CONTEXT7_API_KEY
+      else process.env.CONTEXT7_API_KEY = previousContext7
+    }
   })
 })

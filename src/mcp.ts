@@ -33,7 +33,9 @@ export function mcpServersForClaude(servers: McpServers): McpServers {
 }
 
 export function mcpServersForOmp(servers: McpServers): McpServers {
-  return staticallyEnabled(servers)
+  return Object.fromEntries(Object.entries(servers)
+    .filter(([, server]) => server.enabled !== false && requiredEnvironment(server).length === 0)
+    .map(([name, server]) => [name, withoutAuthoringFields(server)]))
 }
 
 export function piMcpExtension(servers: McpServers): string {
@@ -72,5 +74,5 @@ export function piMcpExtension(servers: McpServers): string {
     "  }",
     "}",
     "",
-  ].join("\\n")
+  ].join("\n")
 }

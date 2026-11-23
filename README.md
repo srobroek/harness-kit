@@ -69,17 +69,17 @@ Declare shared MCP servers in `plugins/<name>/common/.mcp.json`:
 }
 ```
 
-If the user sets the variable, Pi adds the header. OMP and Claude omit the optional header.
+If the user sets the variable, Pi adds the optional header. OMP omits servers with `requiredEnv` because plugin MCP configs do not expand environment variables. Users can add those servers to `~/.omp/agent/mcp.json`, where OMP expands `${VAR}` at load time. Claude retains required `${VAR}` placeholders in plugin MCP configs. When a variable is unset, Claude warns for stdio servers and leaves the placeholder literal. Remote `url` and `headers` values can resolve to empty strings.
 
-`requiredEnv` lists the variables the server needs. OMP and Claude include the server if the build environment contains every listed variable. Pi checks these variables at startup. A `${VAR}` placeholder does not require a credential. Set `enabled` to `false` to disable a server in each generated harness.
+`requiredEnv` lists variables the server needs. OMP omits those servers from generated `mcp.json`. Claude includes the server with its placeholders for load-time expansion. Pi checks these variables at startup. A `${VAR}` placeholder alone does not mean the server needs a credential. Set `enabled` to `false` to disable a server in each generated harness.
 
 `build` writes OMP `mcp.json`, Claude `.mcp.json`, and a Pi `mcp-servers.ts` extension. The MCP inventory lists servers per harness. `build --check` detects changed or stale outputs. Pi extensions register servers with `pi.registerMcpServer`. See [Pi's MCP extension API](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md#mcp-servers).
 
 Set credentials in each harness's user scope:
 
-- **OMP:** add an `mcpServers` entry in `~/.omp/agent/mcp.json`. A user-scope entry overrides the plugin's project declaration.
+- **OMP:** add an `mcpServers` entry in `~/.omp/agent/mcp.json` for servers that require credentials.
 - **Claude:** add the server in Claude's user-scope MCP configuration.
-- **Pi:** Before you start Pi, export each `requiredEnv` variable. Pi adds the optional header if you also set its variable.
+- **Pi:** If you set `requiredEnv`, Pi checks the variable at startup. If you also set the optional header's variable, Pi adds that header.
 
 ### Plugin settings
 
