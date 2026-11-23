@@ -20,6 +20,11 @@ describe("release preset", () => {
     expect(exec[1].prepareCmd).toBe('harness-kit stamp "$(basename "$PWD")" ${nextRelease.version} --git-add')
   })
 
+  test("the release commit takes every harness tree by default, pi included", () => {
+    const git = releaseDefault.plugins.find((plugin: unknown) => Array.isArray(plugin) && plugin[0] === "@semantic-release/git") as [string, { assets: string[] }]
+    expect(git[1].assets).toEqual(["CHANGELOG.md", "package.json", "INVENTORY.md", "opencode/**", "claude/**", "omp/**", "pi/**"])
+  })
+
   const analyzer = (config: ReturnType<typeof releaseConfig>) =>
     config.plugins.find((plugin: unknown) => Array.isArray(plugin) && plugin[0] === "@semantic-release/commit-analyzer") as [string, Record<string, unknown>]
 

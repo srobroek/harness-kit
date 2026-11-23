@@ -16,6 +16,7 @@ export {
   write,
 } from "./generate"
 export { type ValidateOptions, validateClaude } from "./validate-claude"
+export { piPackageProblems, validatePi } from "./validate-pi"
 export { compareVersions, type Exec, PACKAGE_NAME, pinnedVersion, update, type UpdateResult } from "./update"
 export { workflowRefWarnings } from "./workflow-refs"
 export { RUNTIME_MODULES, RUNTIME_MODULE_NAMES, type RuntimeModuleName, resolveRuntime } from "./runtime"

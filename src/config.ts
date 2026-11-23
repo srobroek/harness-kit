@@ -7,7 +7,7 @@ import { fail, httpUrl, isRecord, nonEmptyString } from "./util"
 export const CONFIG_FILE = "harness-kit.json"
 
 /** Every harness the generator can target, in the canonical order used for output. */
-export const KNOWN_HARNESSES = ["opencode", "claude", "omp"] as const
+export const KNOWN_HARNESSES = ["opencode", "claude", "omp", "pi"] as const
 export type Harness = (typeof KNOWN_HARNESSES)[number]
 
 /** Every inventory kind the generator can report, in canonical order. */
@@ -26,6 +26,8 @@ export type Config = {
   pluginKey: string
   /** npm scope of the generated OMP package name. */
   ompScope: string
+  /** npm scope of the generated pi package name. */
+  piScope: string
   /** Names the generator in the note at the top of generated Markdown files. */
   generatedBy: string
   claude: {
@@ -42,7 +44,7 @@ export type Config = {
   omp: { packageType?: "module" | "commonjs" }
 }
 
-const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "sharedDir", "pluginKey", "ompScope", "generatedBy", "claude", "omp"]
+const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "sharedDir", "pluginKey", "ompScope", "piScope", "generatedBy", "claude", "omp"]
 const DIR_NAME = /^[a-z0-9][a-z0-9._-]*$/
 const PACKAGE_SCOPE = /^@[a-z0-9][a-z0-9._-]*$/
 
@@ -98,6 +100,8 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
   const pluginKey = raw.pluginKey === undefined ? "agent-plugins" : nonEmptyString(where, "pluginKey", raw.pluginKey)
   const ompScope = raw.ompScope === undefined ? "@agent-plugins" : nonEmptyString(where, "ompScope", raw.ompScope)
   if (!PACKAGE_SCOPE.test(ompScope)) fail(where, `"ompScope" must look like "@scope", got "${ompScope}"`)
+  const piScope = raw.piScope === undefined ? "@agent-plugins" : nonEmptyString(where, "piScope", raw.piScope)
+  if (!PACKAGE_SCOPE.test(piScope)) fail(where, `"piScope" must look like "@scope", got "${piScope}"`)
   const generatedBy = raw.generatedBy === undefined ? "harness-kit build" : nonEmptyString(where, "generatedBy", raw.generatedBy)
 
   const claude: Config["claude"] = { strict: true }
@@ -137,6 +141,7 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
     sharedDir,
     pluginKey,
     ompScope,
+    piScope,
     generatedBy,
     claude,
     omp,

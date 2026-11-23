@@ -151,6 +151,43 @@ describe("validate-claude and check", () => {
   })
 })
 
+describe("validate-pi", () => {
+  const enablePi = () => {
+    const manifest = readJson("plugins/demo/package.json")
+    manifest["agent-plugins"].harnesses.push("pi")
+    writeFileSync(path.join(root, "plugins/demo/package.json"), JSON.stringify(manifest))
+  }
+
+  test("passes a built pi package and fails one with a broken extension, naming the file", () => {
+    enablePi()
+    run("build")
+    expect(run("validate-pi").code).toBe(0)
+    writeFileSync(path.join(root, "plugins/demo/pi/_kit/rules.ts"), "export default (\n")
+    const result = run("validate-pi")
+    expect(result.code).toBe(1)
+    expect(result.err).toContain("plugins/demo/pi/_kit/rules.ts: does not parse")
+  })
+
+  test("check fails when a pi package is invalid even though the tree is current and Claude validates", () => {
+    enablePi()
+    const bin = path.join(root, "node_modules", ".bin")
+    mkdirSync(bin, { recursive: true })
+    script(path.join(bin, "claude"), "exit 0")
+    run("build")
+    expect(run("check").code).toBe(0)
+    // A skill without a description is valid for the other harnesses, but pi does not load it.
+    writeFileSync(path.join(root, "plugins/demo/common/skills/demo-skill/SKILL.md"), "---\nname: demo-skill\n---\nBody\n")
+    run("build")
+    const result = run("check")
+    expect(result.code).toBe(1)
+    expect(result.err).toContain("plugins/demo/pi/skills/demo-skill/SKILL.md: needs a description")
+  })
+
+  test("with no pi package there is nothing to validate", () => {
+    expect(run("validate-pi").out).toContain("no pi packages yet; nothing to validate")
+  })
+})
+
 describe("check: workflow tag against package pin", () => {
   const consumer = (ref: string) => {
     writeFileSync(path.join(root, "package.json"), JSON.stringify({ devDependencies: { "@srobroek/harness-kit": "1.2.3" } }))

@@ -37,3 +37,18 @@ export function runCli(args: string[], options: { cwd?: string; env?: Record<str
   })
   return { code: run.exitCode, out: run.stdout.toString(), err: run.stderr.toString() }
 }
+
+type Handler = (event: any, ctx: any) => any
+
+/** A fake pi extension API that records handlers and sent messages. `emit` runs an event's handlers and returns their results. */
+export function fakePi() {
+  const handlers = new Map<string, Handler[]>()
+  const sent: Array<{ message: any; options: any }> = []
+  const api = {
+    on: (event: string, handler: Handler) => void handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+    sendMessage: (message: unknown, options: unknown) => void sent.push({ message, options }),
+  }
+  const emit = (event: string, payload: unknown, ctx: unknown = { cwd: "/work" }) => (handlers.get(event) ?? []).map((handler) => handler(payload, ctx))
+  // The runtime modules type their slice of pi's API; the fake records any event, so it stands in for each of them.
+  return { api: api as never, handlers, sent, emit }
+}

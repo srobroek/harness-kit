@@ -1,0 +1,114 @@
+// The pi target's agents. pi-subagents reads an agent from Markdown front matter (`name`, `description`, `tools`,
+// `allowedAgents`, ...) with the system prompt as the body, so harness-kit translates the agent file the plugin
+// ships to OMP into that shape. An `x.pi.md` variant is copied as is instead.
+
+import path from "node:path"
+import { fail, isRecord } from "./util"
+
+/** Source tool names (OMP, Claude Code and OpenCode spellings, lowercased) and the pi tools they stand for. */
+const PI_TOOLS: Readonly<Record<string, readonly string[]>> = {
+  read: ["read", "ls"],
+  ls: ["ls"],
+  list: ["ls"],
+  grep: ["grep"],
+  glob: ["find"],
+  find: ["find"],
+  edit: ["edit"],
+  multiedit: ["edit"],
+  write: ["write"],
+  bash: ["bash"],
+  task: ["subagent"],
+  subagent: ["subagent"],
+}
+
+/** The request header that carries an OpenCode agent's model tier. */
+const MODEL_ROLE_HEADER = "x-opencode-model-role"
+
+const FRONT_MATTER = /^---\r?\n(?:([\s\S]*?)\r?\n)?---[^\S\r\n]*(?:\r?\n|$)/
+const PLAIN_SCALAR = /^[A-Za-z0-9][\w.-]*$/
+
+/** A comma-separated string or a list of strings as a list; undefined for anything else. */
+function nameList(value: unknown): string[] | undefined {
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean)
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return value.map((item) => item.trim()).filter(Boolean)
+  return undefined
+}
+
+const scalar = (value: string) => (PLAIN_SCALAR.test(value) ? value : JSON.stringify(value))
+
+/** The model tier an OpenCode agent names in its request headers, if any. */
+function modelRole(front: Record<string, unknown>): string | undefined {
+  const request = front.request
+  if (!isRecord(request) || !isRecord(request.headers)) return undefined
+  const role = request.headers[MODEL_ROLE_HEADER]
+  return typeof role === "string" ? role : undefined
+}
+
+export type PiAgentSource = {
+  /** The agent's name when its front matter sets none: the file name without `.md`. */
+  name: string
+  /** Repo-relative path of the source file, for the generated note and errors. */
+  from: string
+  generatedBy: string
+}
+
+/**
+ * The pi-subagents agent for one agent file. Kept: `name` (default: the file name), `description`, the body
+ * verbatim, `tools` mapped to pi's tool names, and OMP `spawns` as `allowedAgents`. Dropped, and named in a
+ * front-matter comment: `model` and the OpenCode model tier (pi-subagents takes the model from
+ * `subagents.agentOverrides`), tools without a pi counterpart, and every other key.
+ *
+ * Throws when the source has no `tools` list: pi-subagents gives an agent without one every default tool, so an
+ * agent restricted only by OpenCode `permissions` would gain tools. A list whose tools all drop becomes `tools: ""`,
+ * which pi-subagents reads as an empty allowlist: the agent gets no tools.
+ */
+export function piAgent(text: string, source: PiAgentSource): string {
+  const match = FRONT_MATTER.exec(text)
+  let parsed: unknown
+  if (match) {
+    try {
+      parsed = Bun.YAML.parse(match[1] ?? "")
+    } catch (error) {
+      fail(source.from, `front matter is not valid YAML (${error instanceof Error ? error.message : String(error)})`)
+    }
+  }
+  if (parsed !== undefined && parsed !== null && !isRecord(parsed)) fail(source.from, "front matter must be a mapping")
+  const front = isRecord(parsed) ? parsed : {}
+  const body = match ? text.slice(match[0].length) : text
+
+  const ownName = typeof front.name === "string" ? front.name.trim() : ""
+  const name = ownName || source.name
+  const description = typeof front.description === "string" ? front.description : undefined
+  const tools = nameList(front.tools)
+  if (!tools) {
+    const base = source.from.replace(/(?:\.omp)?\.md$/, "")
+    fail(
+      source.from,
+      `has no tools list for pi, and pi-subagents gives an agent without one every default tool. Add ${path.basename(base)}.pi.md, or an OMP variant ${path.basename(base)}.omp.md that lists tools`,
+    )
+  }
+  const piTools = [...new Set(tools.flatMap((tool) => PI_TOOLS[tool.toLowerCase()] ?? []))]
+  const unmatched = tools.filter((tool) => !(tool.toLowerCase() in PI_TOOLS))
+  const spawns = nameList(front.spawns)
+  const allowedAgents = spawns && !spawns.includes("*") ? spawns : undefined
+  const role = modelRole(front)
+  // `model` is reported on its own line; every other key the translation did not carry over is listed as dropped.
+  const carried = new Set(["model", "tools", ...(ownName ? ["name"] : []), ...(description !== undefined ? ["description"] : []), ...(spawns ? ["spawns"] : [])])
+  const dropped = Object.keys(front).filter((key) => !carried.has(key))
+
+  const model = [
+    ...(front.model !== undefined ? [`model ${JSON.stringify(String(front.model))}`] : []),
+    ...(role !== undefined ? [`OpenCode model role ${JSON.stringify(role)}`] : []),
+  ]
+  const lines = [
+    `# Generated by ${source.generatedBy} from ${source.from}. Do not edit.`,
+    ...(model.length > 0 ? [`# pi-subagents takes the model from subagents.agentOverrides.${name}.model; dropped: ${model.join(", ")}`] : []),
+    ...(unmatched.length > 0 ? [`# Tools pi has no counterpart for, dropped: ${unmatched.join(", ")}`] : []),
+    ...(dropped.length > 0 ? [`# Keys pi-subagents does not read, dropped: ${dropped.join(", ")}`] : []),
+    `name: ${scalar(name)}`,
+    ...(description !== undefined ? [`description: ${JSON.stringify(description)}`] : []),
+    `tools: ${piTools.length > 0 ? piTools.join(", ") : '""'}`,
+    ...(allowedAgents ? [`allowedAgents: ${allowedAgents.join(", ")}`] : []),
+  ]
+  return `---\n${lines.join("\n")}\n---\n${body}`
+}
