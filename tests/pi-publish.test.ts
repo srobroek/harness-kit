@@ -33,6 +33,9 @@ const REPO = {
   bugs: { url: "https://github.com/srobroek/harness-plugins/issues" },
 }
 
+const REPOMIX = { bin: "repomix", for: "packing", install: { url: "https://e.com/repomix", npm: "repomix@^1.2.0" } }
+const setPrerequisites = (prerequisites: unknown[]) => editManifest((manifest) => (manifest["agent-plugins"].prerequisites = prerequisites))
+
 beforeEach(() => {
   root = fixtureCopy()
   config = loadConfig(root)
@@ -61,6 +64,16 @@ describe("pi.publish off", () => {
     rmSync(path.join(root, "package.json"))
     generate()
     expect(stale()).toEqual([])
+  })
+
+  test("an npm prerequisite adds no dependencies: the bytes equal those of the same list without install.npm", () => {
+    setPrerequisites([REPOMIX])
+    generate()
+    const withNpm = readFileSync(demo("pi/package.json"))
+    expect(JSON.parse(withNpm.toString())).not.toHaveProperty("dependencies")
+    setPrerequisites([{ ...REPOMIX, install: { url: REPOMIX.install.url } }])
+    generate()
+    expect(readFileSync(demo("pi/package.json")).equals(withNpm)).toBe(true)
   })
 })
 
@@ -121,6 +134,35 @@ describe("pi.publish on", () => {
   test("a package without imports of pi's host packages gets no peerDependencies", () => {
     generate()
     expect(readJson("pi/package.json")).not.toHaveProperty("peerDependencies")
+  })
+
+  test("an npm prerequisite becomes a dependency with its range, sorted by name, once per package", () => {
+    setPrerequisites([
+      { bin: "bd", for: "beads", install: { url: "https://e.com/bd" } },
+      REPOMIX,
+      { bin: "tool", for: "tooling", install: { url: "https://e.com/t", npm: "@scope/tool@~2.1" } },
+      { bin: "tool-lint", for: "linting", install: { url: "https://e.com/t", npm: "@scope/tool@~2.1" } },
+    ])
+    generate()
+    const manifest = readJson("pi/package.json")
+    expect(manifest.dependencies).toEqual({ "@scope/tool": "~2.1", repomix: "^1.2.0" })
+    expect(Object.keys(manifest.dependencies)).toEqual(["@scope/tool", "repomix"])
+    expect(Object.keys(manifest).slice(-3)).toEqual(["publishConfig", "dependencies", "pi"])
+    expect(stale()).toEqual([])
+  })
+
+  test("a package without npm prerequisites gets no dependencies", () => {
+    setPrerequisites([{ bin: "bd", for: "beads", install: { url: "https://e.com/bd" } }])
+    generate()
+    expect(readJson("pi/package.json")).not.toHaveProperty("dependencies")
+  })
+
+  test.each([
+    ["a package pi supplies", [{ ...REPOMIX, install: { url: "https://e.com/r", npm: "@earendil-works/pi-tui@^1" } }], /"@earendil-works\/pi-tui" is supplied by pi, so a published package must not list it in "dependencies"/],
+    ["one package with two ranges", [REPOMIX, { ...REPOMIX, bin: "repomix-cli", install: { url: "https://e.com/r", npm: "repomix@^2.0.0" } }], /prerequisites give "repomix" two ranges, "\^1\.2\.0" and "\^2\.0\.0"/],
+  ])("refuses %s", (_label, prerequisites, message) => {
+    setPrerequisites(prerequisites)
+    expect(() => generate()).toThrow(message)
   })
 
   test.each([

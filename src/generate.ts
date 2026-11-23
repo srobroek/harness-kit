@@ -5,7 +5,7 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { installHint } from "../runtime/pi/prereqs"
-import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind, type Prerequisite, readPrerequisites } from "./config"
+import { type Config, type Harness, KNOWN_HARNESSES, KNOWN_KINDS, type Kind, npmSpec, type Prerequisite, readPrerequisites } from "./config"
 import { piAgent } from "./pi"
 import {
   PREREQS_DATA,
@@ -505,10 +505,26 @@ const PI_HOST_PACKAGES = ["@earendil-works/pi-agent-core", "@earendil-works/pi-a
 
 const packageOf = (specifier: string) => specifier.split("/").slice(0, specifier.startsWith("@") ? 2 : 1).join("/")
 
+/** `dependencies` of a published pi package: the npm package and range of each `install.npm` prerequisite, by name. */
+function prerequisiteDependencies(plugin: Plugin): Record<string, string> {
+  const where = `plugins/${plugin.name}/package.json`
+  const found = new Map<string, string>()
+  for (const { install } of plugin.prerequisites ?? []) {
+    const spec = install.npm === undefined ? undefined : npmSpec(install.npm)
+    if (!spec) continue
+    if (PI_HOST_PACKAGES.includes(spec.name)) fail(where, `prerequisite package "${spec.name}" is supplied by pi, so a published package must not list it in "dependencies"`)
+    const other = found.get(spec.name)
+    if (other !== undefined && other !== spec.range) fail(where, `prerequisites give "${spec.name}" two ranges, "${other}" and "${spec.range}"; "dependencies" takes one`)
+    found.set(spec.name, spec.range)
+  }
+  return Object.fromEntries([...found].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+}
+
 /**
  * The npm fields of a published pi package. `files` lists every top-level entry the tree ships, so nothing else is
  * packed: not package.json (npm always packs it), node_modules or a dot-entry such as `.DS_Store`. `own` are the tree's
- * hand-authored files, which are scanned for imports of the host packages.
+ * hand-authored files, which are scanned for imports of the host packages. An npm prerequisite becomes a dependency,
+ * so installing the package puts its bin in `node_modules/.bin`, where the prerequisite check looks first.
  */
 function publishFields(root: string, plugin: Plugin, publish: PublishSettings, files: readonly string[], own: readonly string[]): Record<string, unknown> {
   const license = plugin.license ?? publish.license
@@ -519,6 +535,7 @@ function publishFields(root: string, plugin: Plugin, publish: PublishSettings, f
   )
   const peers = PI_HOST_PACKAGES.filter((name) => imported.has(name))
   const shipped = [...new Set(files.map((file) => file.split("/")[0] as string))].filter((entry) => entry !== "package.json" && entry !== "node_modules" && !entry.startsWith("."))
+  const dependencies = prerequisiteDependencies(plugin)
   return {
     license,
     repository: { type: "git", url: publish.repository, directory: `plugins/${plugin.name}/pi` },
@@ -526,6 +543,7 @@ function publishFields(root: string, plugin: Plugin, publish: PublishSettings, f
     ...(publish.bugs !== undefined ? { bugs: publish.bugs } : {}),
     files: shipped.sort(),
     publishConfig: { access: "public", provenance: true },
+    ...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
     ...(peers.length > 0 ? { peerDependencies: Object.fromEntries(peers.map((name) => [name, "*"])) } : {}),
   }
 }

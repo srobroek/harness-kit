@@ -184,10 +184,7 @@ export default function gate(pi) {
 
 The hint does not assume any one setup. `mise use -g` is one option among the others, and the URL appears whenever the plugin gives one. harness-kit adds no `preinstall`, `install` or `postinstall` script, so installing a plugin runs nothing.
 
-A tool that is itself an npm package, such as repomix, can come with the plugin instead:
-
-1. Set `install.npm` to its package and range, such as `repomix@^1.2.0`.
-2. List the same entry under `dependencies` of the package you publish. harness-kit does not add it to any manifest; the plugin author declares it.
+A tool that is itself an npm package, such as repomix, can come with the plugin instead. Set `install.npm` to its package and range, such as `repomix@^1.2.0`. With `pi.publish` on, `build` copies it into `dependencies` of the published pi `package.json`, so installing the package installs the tool (see "Publishing pi packages to npm"). harness-kit adds no `dependencies` to any other manifest; there the plugin author declares the entry.
 
 With `install.npm` set, the check looks in `node_modules/.bin` before `PATH`: first the package's own, then that of each directory above it. A dependency's bin lands in one of those, hoisted or not.
 
@@ -333,9 +330,10 @@ A repo can publish each plugin's pi tree as an npm package, installed with `pi i
 | `homepage`, `bugs` | Copied from the root `package.json` when it has them. |
 | `files` | Every top-level entry of the tree except `package.json`, `node_modules` and dot-entries: `extensions`, `_kit`, the `commonDirs` copies, `options.json`, `README.md`, `CHANGELOG.md` and `LICENSE`, as present. A file you put in the pi tree ships too. |
 | `publishConfig` | `{ "access": "public", "provenance": true }` |
+| `dependencies` | The package and range of each prerequisite's `install.npm`, by name: `"repomix@^1.2.0"` gives `"repomix": "^1.2.0"`. Two ranges for one package, or a package that pi supplies, are errors. |
 | `peerDependencies` | `"*"` for each host package that the tree's own modules import: `@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui` and `typebox`. pi supplies them, so they are never in `dependencies`. |
 
-The tree also gets copies of the plugin's `README.md` and `CHANGELOG.md` and of the repo's `LICENSE`, when they exist. pi shows a package's `CHANGELOG.md` after an update. `build --check` catches a stale copy. A copy whose source goes away is removed. Turning `pi.publish` off leaves the copies in place; delete them by hand. The generated `package.json` has no `private` and no `dependencies`.
+The tree also gets copies of the plugin's `README.md` and `CHANGELOG.md` and of the repo's `LICENSE`, when they exist. pi shows a package's `CHANGELOG.md` after an update. `build --check` catches a stale copy. A copy whose source goes away is removed. Turning `pi.publish` off leaves the copies in place; delete them by hand. The generated `package.json` has no `private`, and `dependencies` only from npm prerequisites.
 
 Releases publish through npm trusted publishing (OIDC), with the npm CLI and no `NPM_TOKEN`. bun still installs and runs everything else:
 

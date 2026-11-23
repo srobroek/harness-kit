@@ -64,6 +64,12 @@ export type { Prerequisite }
 const BIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 const NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(.+)$/
 
+/** The package and range of an `install.npm` spec such as `repomix@^1.2.0`; undefined when it is not one. */
+export function npmSpec(spec: string): { name: string; range: string } | undefined {
+  const match = NPM_SPEC.exec(spec)
+  return match ? { name: match[1] as string, range: match[2] as string } : undefined
+}
+
 /** A semver range the prerequisite check can evaluate. */
 function versionRange(where: string, field: string, raw: unknown): string {
   const range = nonEmptyString(where, field, raw)
@@ -106,9 +112,9 @@ export function readPrerequisites(where: string, field: string, raw: unknown): P
     if (raw.url !== undefined) install.url = httpUrl(where, `${at}.install.url`, raw.url)
     if (raw.npm !== undefined) {
       const spec = nonEmptyString(where, `${at}.install.npm`, raw.npm)
-      const match = NPM_SPEC.exec(spec)
-      if (!match) fail(where, `"${at}.install.npm" must be "<package>@<range>", such as "repomix@^1.2.0", got ${JSON.stringify(spec)}`)
-      versionRange(where, `${at}.install.npm`, match[2])
+      const parsed = npmSpec(spec)
+      if (!parsed) fail(where, `"${at}.install.npm" must be "<package>@<range>", such as "repomix@^1.2.0", got ${JSON.stringify(spec)}`)
+      versionRange(where, `${at}.install.npm`, parsed.range)
       install.npm = spec
     }
     if (install.mise === undefined && install.url === undefined) fail(where, `"${at}.install" needs "mise", "url" or both`)
