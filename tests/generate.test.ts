@@ -39,19 +39,22 @@ describe("MCP declarations", () => {
       mcpServers: {
         enabled: { command: "enabled-server" },
         disabled: { command: "disabled-server", enabled: false },
-        optional: { command: "optional-server", env: { API_KEY: "${OPTIONAL_API_KEY}" } },
+        keyless: { command: "context7", optionalHeaders: { "x-apikey": "CONTEXT7_API_KEY" }, headers: { "x-apikey": "${CONTEXT7_API_KEY}" } },
+        required: { command: "private-server", env: { API_KEY: "${API_KEY}" }, requiredEnv: ["API_KEY"] },
       },
     }, null, 2) + "\n")
     generate()
     expect(readJson(demo("omp/mcp.json"))).toEqual({
       $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
-      mcpServers: { enabled: { command: "enabled-server" } },
+      mcpServers: { enabled: { command: "enabled-server" }, keyless: { command: "context7" } },
     })
-    expect(readJson(demo("claude/.mcp.json"))).toEqual({ $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", mcpServers: { enabled: { command: "enabled-server" } } })
-    expect(readJson(demo("omp/mcp.json")).mcpServers.enabled).not.toHaveProperty("enabled")
+    expect(readJson(demo("claude/.mcp.json"))).toEqual({
+      $schema: "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+      mcpServers: { enabled: { command: "enabled-server" }, keyless: { command: "context7" } },
+    })
     expect(readJson(demo("pi/package.json")).pi.extensions).toContain("./mcp-servers.ts")
-    expect(readJson("inventory.json").plugins[0].harnesses.omp.mcp).toEqual(["enabled"])
-    expect(readJson("inventory.json").plugins[0].harnesses.pi.mcp).toEqual(["enabled", "optional"])
+    expect(readJson("inventory.json").plugins[0].harnesses.omp.mcp).toEqual(["enabled", "keyless"])
+    expect(readJson("inventory.json").plugins[0].harnesses.pi.mcp).toEqual(["enabled", "keyless", "required"])
     expect(staleFiles().filter((file) => file.endsWith("mcp.json") || file.endsWith("mcp-servers.ts"))).toEqual([])
     writeFileSync(path.join(root, demo("omp/mcp.json")), "{}\n")
     expect(staleFiles()).toContain(demo("omp/mcp.json"))

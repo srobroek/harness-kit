@@ -755,6 +755,8 @@ function commonMcpServers(root: string, plugin: Plugin): McpServers | undefined 
   const servers: McpServers = {}
   for (const [name, value] of Object.entries(raw.mcpServers)) {
     if (!isRecord(value)) fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}" must be an object`)
+    if (value.requiredEnv !== undefined && (!Array.isArray(value.requiredEnv) || value.requiredEnv.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))) fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}.requiredEnv" must be an array of environment variable names`)
+    if (value.optionalHeaders !== undefined && (!isRecord(value.optionalHeaders) || Object.entries(value.optionalHeaders).some(([header, key]) => !header || typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))) fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}.optionalHeaders" must map HTTP header names to environment variable names`)
     if (value.enabled !== undefined && typeof value.enabled !== "boolean") fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}.enabled" must be true or false`)
     servers[name] = value
   }

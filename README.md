@@ -56,22 +56,30 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun ins
 
 ### MCP servers
 
-Declare the shared MCP servers for a plugin in `plugins/<name>/common/.mcp.json`:
+Declare shared MCP servers in `plugins/<name>/common/.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "docs": { "command": "docs-mcp", "env": { "API_KEY": "${DOCS_API_KEY}" } },
-    "optional": { "command": "optional-mcp", "enabled": false }
+    "docs": { "command": "docs-mcp" },
+    "context7": { "command": "context7-mcp", "optionalHeaders": { "x-apikey": "CONTEXT7_API_KEY" } },
+    "private": { "command": "private-mcp", "env": { "API_KEY": "${API_KEY}" }, "requiredEnv": ["API_KEY"] },
+    "disabled": { "command": "optional-mcp", "enabled": false }
   }
 }
 ```
 
-When referenced credentials are present, Pi expands them at runtime. OMP and Claude omit servers with optional credentials because their declarations cannot gate startup.
+If the user sets the variable, Pi adds the header. OMP and Claude omit the optional header.
 
-`build` writes `omp/mcp.json`, `claude/.mcp.json` and `pi/mcp-servers.ts`. OMP and Claude omit disabled servers because their MCP declarations cannot conditionally register servers. Pi registers only enabled servers and skips servers with missing optional credentials.
+`requiredEnv` lists the variables the server needs. OMP and Claude include the server if the build environment contains every listed variable. Pi checks these variables at startup. A `${VAR}` placeholder does not require a credential. Set `enabled` to `false` to disable a server in each generated harness.
 
-The generated `mcp` inventory lists server names per harness. `build --check` detects changes and stale MCP outputs. Pi packages include a generated extension that calls `pi.registerMcpServer`. See [Pi's MCP extension API](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md#mcp-servers).
+`build` writes OMP `mcp.json`, Claude `.mcp.json`, and a Pi `mcp-servers.ts` extension. The MCP inventory lists servers per harness. `build --check` detects changed or stale outputs. Pi extensions register servers with `pi.registerMcpServer`. See [Pi's MCP extension API](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md#mcp-servers).
+
+Set credentials in each harness's user scope:
+
+- **OMP:** add an `mcpServers` entry in `~/.omp/agent/mcp.json`. A user-scope entry overrides the plugin's project declaration.
+- **Claude:** add the server in Claude's user-scope MCP configuration.
+- **Pi:** Before you start Pi, export each `requiredEnv` variable. Pi adds the optional header if you also set its variable.
 
 ### Plugin settings
 

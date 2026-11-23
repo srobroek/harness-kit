@@ -1,30 +1,32 @@
 import { describe, expect, test } from "bun:test"
-import { mcpServersForClaude, mcpServersForOmp, optionalEnvironment, piMcpExtension, type McpServers } from "../src/mcp"
+import { mcpServersForClaude, mcpServersForOmp, mcpServersForPi, piMcpExtension, type McpServers } from "../src/mcp"
 
 const servers: McpServers = {
   enabled: { command: "server" },
   disabled: { command: "server", enabled: false },
-  optional: { command: "server", env: { API_KEY: "${API_KEY}" } },
+  keyless: { command: "context7", optionalHeaders: { "CONTEXT7_API_KEY": "CONTEXT7_API_KEY" } },
+  required: { command: "private-server", env: { API_KEY: "${API_KEY}" }, requiredEnv: ["API_KEY"] },
 }
 
 describe("MCP output policies", () => {
-  test("finds optional credentials in env and headers", () => {
-    expect(optionalEnvironment({ env: { API_KEY: "${API_KEY}" }, headers: { Authorization: "Bearer ${TOKEN}" } })).toEqual(["API_KEY", "TOKEN"])
+  test("preserves keyless servers without optional headers and omits missing required credentials", () => {
+    const safe = { enabled: { command: "server" }, keyless: { command: "context7" } }
+    expect(mcpServersForClaude(servers, {})).toEqual(safe)
+    expect(mcpServersForOmp(servers, {})).toEqual(safe)
+    expect(mcpServersForClaude(servers, { API_KEY: "present" })).toHaveProperty("required")
+    expect(mcpServersForOmp(servers, { API_KEY: "present" })).toHaveProperty("required")
+    expect(mcpServersForPi(servers, {}).keyless).toEqual({ command: "context7" })
+    expect(mcpServersForPi(servers, { CONTEXT7_API_KEY: "present" }).keyless).toEqual({ command: "context7", headers: { CONTEXT7_API_KEY: "present" } })
+    expect(mcpServersForPi(servers, {}).required).toBeUndefined()
   })
 
-  test("omits disabled and optional-key servers from harnesses without conditional registration", () => {
-    const authoring = { enabled: { command: "server", enabled: true }, disabled: { command: "server", enabled: false } }
-    expect(mcpServersForClaude(authoring)).toEqual({ enabled: { command: "server" } })
-    expect(mcpServersForOmp(authoring)).toEqual({ enabled: { command: "server" } })
-    expect(mcpServersForClaude(servers)).toEqual({ enabled: { command: "server" } })
-    expect(mcpServersForOmp(servers)).toEqual({ enabled: { command: "server" } })
-  })
-
-  test("registers only enabled Pi servers and guards optional credentials", () => {
+  test("adds optional Pi headers only when present and gates required credentials", () => {
     const source = piMcpExtension(servers)
     expect(source).toContain('if (keys.some((key) => !process.env[key])) continue')
-    expect(source).toContain('"optional": [\n    "API_KEY"')
-    expect(source).toContain('const servers = {\n  "enabled": {\n    "command": "server"\n  },\n  "optional":')
+    expect(source).toContain('if (value) (config.headers ??= {})[header] = value')
+    expect(source).toContain('"CONTEXT7_API_KEY": "CONTEXT7_API_KEY"')
+    expect(source).toContain('"required": [\n    "API_KEY"')
     expect(source).not.toContain('"disabled":')
+    expect(source).not.toContain('"optionalHeaders":')
   })
 })
