@@ -200,10 +200,12 @@ Some tools are not npm packages, so they cannot be dependencies: bd, wt, chezmoi
 
   | Key | Lists | When |
   | --- | --- | --- |
-  | `extensions` | `./extensions/<file>` for each `.ts` or `.js` module, then `./_kit/rules.ts`, then `./_kit/prereqs.ts` | the tree has extension modules, rules or prerequisites |
+  | `extensions` | `./extensions/<file>` for each `.ts` or `.js` module, then `./_kit/rules.ts`, then `./_kit/prereqs.ts`; `[]` when the tree ships none of these, no skill and no command | the tree has extension modules, rules or prerequisites, or none of the keys `extensions`, `skills` and `prompts` would appear |
   | `skills` | `./skills` | `skills/` holds a skill |
   | `prompts` | `./commands` | `commands/` holds Markdown: pi loads commands as prompt templates |
   | `subagents.agents` | `./agents` | `agents/` holds an agent, for [pi-subagents](https://github.com/nicobailon/pi-subagents/blob/main/docs/agents.md) |
+
+  pi loads a package whose manifest lists none of `extensions`, `skills`, `prompts` and `themes` as one extension at the package root, and fails to start. So a package of agents only gets `"extensions": []`.
 
 - The `commonDirs` copies, `x.pi.md` variants and shared items work as for every harness.
 - Extensions are hand-authored TypeScript or JavaScript in `pi/extensions/`, as OMP extensions are in `omp/extensions/`. pi loads `.ts` directly, so there is no build step. Each module default-exports a function that takes pi's `ExtensionAPI`.

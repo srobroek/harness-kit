@@ -607,6 +607,9 @@ function treeFiles(root: string, plugin: Plugin, harness: Harness, generated: st
 /**
  * The `pi` key of the pi package.json: only the resources the tree ships. An explicit manifest turns off pi's
  * conventional directories, so commands are listed as prompts and agents under pi-subagents' `subagents.agents`.
+ * pi loads a package whose manifest lists none of `extensions`, `skills`, `prompts` and `themes` as one extension at
+ * the package root, which fails to start (pi 1.6.0). Such a manifest, as for a package of agents only, gets
+ * `extensions: []`.
  */
 function piResources(files: readonly string[]): Record<string, unknown> {
   const extensions = [
@@ -615,10 +618,12 @@ function piResources(files: readonly string[]): Record<string, unknown> {
   ].map((file) => `./${file}`)
   extensions.push(...prereqsEntry(files))
   const has = (accept: (file: string) => boolean) => files.some(accept)
+  const skills = has((file) => /^skills\/.+\/SKILL\.md$/.test(file))
+  const prompts = has((file) => /^commands\/[^/]+\.md$/.test(file))
   return {
-    ...(extensions.length > 0 ? { extensions } : {}),
-    ...(has((file) => /^skills\/.+\/SKILL\.md$/.test(file)) ? { skills: ["./skills"] } : {}),
-    ...(has((file) => /^commands\/[^/]+\.md$/.test(file)) ? { prompts: ["./commands"] } : {}),
+    ...(extensions.length > 0 || (!skills && !prompts) ? { extensions } : {}),
+    ...(skills ? { skills: ["./skills"] } : {}),
+    ...(prompts ? { prompts: ["./commands"] } : {}),
     ...(has((file) => file.startsWith("agents/") && isPiAgent(file)) ? { subagents: { agents: ["./agents"] } } : {}),
   }
 }

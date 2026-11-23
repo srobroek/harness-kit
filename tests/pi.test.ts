@@ -63,11 +63,29 @@ describe("pi package.json", () => {
     expect(JSON.parse(readFileSync(path.join(root, "inventory.json"), "utf8")).plugins[0].harnesses.pi.extensions).toEqual(["alpha", "zeta"])
   })
 
-  test("a tree without skills or rules gets an empty pi key", () => {
+  test("a tree without skills, rules or extensions lists an empty extensions key, so pi does not load the package root", () => {
     rmSync(demo("common/skills"), { recursive: true })
     rmSync(demo("common/rules"), { recursive: true })
     generate()
-    expect(readJson("pi/package.json").pi).toEqual({})
+    expect(readJson("pi/package.json").pi).toEqual({ extensions: [] })
+  })
+
+  test("a package of agents only lists an empty extensions key next to its agents", () => {
+    // pi 1.6.0 with `"pi": { "subagents": { "agents": ["./agents"] } }` failed to start: Failed to load extension
+    // "<tree>": Failed to load extension: Cannot find module '<tree>'. Any one of extensions, skills, prompts and themes
+    // keeps pi from loading the package root as an extension.
+    config.commonDirs = ["agents"]
+    put("common/agents/helper.md", "---\ndescription: Helps.\ntools: read\n---\nHelp.\n")
+    generate()
+    expect(readJson("pi/package.json").pi).toEqual({ extensions: [], subagents: { agents: ["./agents"] } })
+    expect(piPackageProblems(demo("pi"))).toEqual([])
+    expect(stale()).toEqual([])
+  })
+
+  test("a tree with skills or prompts but no extension modules gets no extensions key", () => {
+    rmSync(demo("common/rules"), { recursive: true })
+    generate()
+    expect(readJson("pi/package.json").pi).toEqual({ skills: ["./skills"] })
   })
 
   test("commands become prompt templates and agents become pi-subagents package agents", () => {
