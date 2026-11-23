@@ -461,6 +461,75 @@ function prerequisiteFiles(root: string, plugin: Plugin, config: Config): Output
 /** `./_kit/prereqs.ts` when this build vendors it into the tree; `files` are relative to the tree. */
 const prereqsEntry = (files: readonly string[]) => (files.includes(`${RUNTIME_DIR}/${PREREQS_MODULE}`) ? [`./${RUNTIME_DIR}/${PREREQS_MODULE}`] : [])
 
+/** Files a published pi tree takes from the plugin (README, changelog) and the repo (licence), copied byte for byte. */
+const PUBLISH_COPIES = [
+  ["README.md", "plugin"],
+  ["CHANGELOG.md", "plugin"],
+  ["LICENSE", "repo"],
+] as const
+
+/** Root files of a harness tree that the build owns: the copies a published pi tree takes. */
+const ownedRootFiles = (harness: Harness, config: Config): readonly string[] => (harness === "pi" && config.pi.publish ? PUBLISH_COPIES.map(([file]) => file) : [])
+
+function publishCopies(root: string, plugin: Plugin, config: Config): Output[] {
+  if (!config.pi.publish || !plugin.harnesses.includes("pi")) return []
+  return PUBLISH_COPIES.flatMap(([file, from]) => {
+    const source = path.join(from === "plugin" ? pluginDir(root, plugin) : root, file)
+    return existsSync(source) ? [{ file: path.join(harnessDir(root, plugin, "pi"), file), contents: readFileSync(source) }] : []
+  })
+}
+
+/** What a published pi package takes from the repo's root package.json. */
+type PublishSettings = { license?: string; repository: string; homepage?: unknown; bugs?: unknown }
+
+const GITHUB_SHORTHAND = /^(?:github:)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/
+
+/** The root package.json fields every published pi package carries. npm provenance checks `repository` against the publishing repo. */
+function readPublishSettings(root: string): PublishSettings {
+  const where = "package.json"
+  const file = path.join(root, "package.json")
+  if (!existsSync(file)) fail(where, 'missing; "pi.publish" takes "repository" from the root package.json')
+  const manifest = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+  const raw = isRecord(manifest.repository) ? manifest.repository.url : manifest.repository
+  if (raw === undefined) fail(where, '"repository" is required when "pi.publish" is on, because npm provenance checks it against the repository that publishes')
+  const given = nonEmptyString(where, "repository", raw)
+  const shorthand = GITHUB_SHORTHAND.exec(given)
+  const repository = shorthand ? `git+https://github.com/${shorthand[1]}/${shorthand[2]}.git` : given
+  if (!/^(?:git\+)?https:\/\//.test(repository)) fail(where, `"repository" must be a GitHub shorthand ("owner/repo") or an https URL, got ${JSON.stringify(given)}`)
+  const license = manifest.license === undefined ? undefined : nonEmptyString(where, "license", manifest.license)
+  return { license, repository, homepage: manifest.homepage, bugs: manifest.bugs }
+}
+
+/** Packages pi supplies to extensions. A published package lists the ones it imports as peers, never as dependencies. */
+const PI_HOST_PACKAGES = ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"]
+
+const packageOf = (specifier: string) => specifier.split("/").slice(0, specifier.startsWith("@") ? 2 : 1).join("/")
+
+/**
+ * The npm fields of a published pi package. `files` lists every top-level entry the tree ships, so nothing else is
+ * packed: not package.json (npm always packs it), node_modules or a dot-entry such as `.DS_Store`. `own` are the tree's
+ * hand-authored files, which are scanned for imports of the host packages.
+ */
+function publishFields(root: string, plugin: Plugin, publish: PublishSettings, files: readonly string[], own: readonly string[]): Record<string, unknown> {
+  const license = plugin.license ?? publish.license
+  if (license === undefined) fail(`plugins/${plugin.name}/package.json`, '"license" is required when "pi.publish" is on; set it here or in the root package.json')
+  const dir = harnessDir(root, plugin, "pi")
+  const imported = new Set(
+    own.filter((file) => MODULE_EXTENSION.test(file) && !file.startsWith("node_modules/")).flatMap((file) => bareImports(readFileSync(path.join(dir, file), "utf8")).map(packageOf)),
+  )
+  const peers = PI_HOST_PACKAGES.filter((name) => imported.has(name))
+  const shipped = [...new Set(files.map((file) => file.split("/")[0] as string))].filter((entry) => entry !== "package.json" && entry !== "node_modules" && !entry.startsWith("."))
+  return {
+    license,
+    repository: { type: "git", url: publish.repository, directory: `plugins/${plugin.name}/pi` },
+    ...(publish.homepage !== undefined ? { homepage: publish.homepage } : {}),
+    ...(publish.bugs !== undefined ? { bugs: publish.bugs } : {}),
+    files: shipped.sort(),
+    publishConfig: { access: "public", provenance: true },
+    ...(peers.length > 0 ? { peerDependencies: Object.fromEntries(peers.map((name) => [name, "*"])) } : {}),
+  }
+}
+
 function ompExtensions(root: string, plugin: Plugin): string[] {
   const dir = path.join(harnessDir(root, plugin, "omp"), "extensions")
   if (!existsSync(dir)) return []
@@ -476,11 +545,16 @@ function generatedIn(root: string, plugin: Plugin, harness: Harness, outputs: re
   return outputs.filter((output) => output.file.startsWith(prefix)).map((output) => output.file.slice(prefix.length).split(path.sep).join("/"))
 }
 
-/** What a harness tree holds after this build: its hand-authored files outside the generated directories, plus `generated`. */
-function treeFiles(root: string, plugin: Plugin, harness: Harness, generated: string[], config: Config): string[] {
+/** The hand-authored files of a harness tree: everything outside the directories and root files the build owns. */
+function ownFiles(root: string, plugin: Plugin, harness: Harness, config: Config): string[] {
   const owned = [...config.commonDirs, RUNTIME_DIR]
-  const own = listFiles(harnessDir(root, plugin, harness)).filter((file) => !owned.some((dir) => file.startsWith(`${dir}/`)))
-  return [...new Set([...own, ...generated])].sort()
+  const ownedRoot = ownedRootFiles(harness, config)
+  return listFiles(harnessDir(root, plugin, harness)).filter((file) => !owned.some((dir) => file.startsWith(`${dir}/`)) && !ownedRoot.includes(file))
+}
+
+/** What a harness tree holds after this build: its hand-authored files, plus `generated`. */
+function treeFiles(root: string, plugin: Plugin, harness: Harness, generated: string[], config: Config): string[] {
+  return [...new Set([...ownFiles(root, plugin, harness, config), ...generated])].sort()
 }
 
 /**
@@ -544,7 +618,7 @@ function claudeLinks(plugin: Plugin, config: Config): { homepage?: string; repos
   }
 }
 
-function manifests(root: string, plugin: Plugin, config: Config, copies: readonly Output[]): Output[] {
+function manifests(root: string, plugin: Plugin, config: Config, copies: readonly Output[], publish?: PublishSettings): Output[] {
   const { name, version, description, category } = plugin
   const outputs: Output[] = []
   const at = (harness: Harness, file: string) => path.join(harnessDir(root, plugin, harness), file)
@@ -599,9 +673,10 @@ function manifests(root: string, plugin: Plugin, config: Config, copies: readonl
   }
   if (plugin.harnesses.includes("pi")) {
     const files = treeFiles(root, plugin, "pi", generatedIn(root, plugin, "pi", copies), config)
+    const npm = publish ? publishFields(root, plugin, publish, files, ownFiles(root, plugin, "pi", config)) : {}
     outputs.push({
       file: at("pi", "package.json"),
-      contents: json({ name: `${config.piScope}/${name}`, version, description, keywords: ["pi-package"], pi: piResources(files) }),
+      contents: json({ name: `${config.piScope}/${name}`, version, description, keywords: ["pi-package"], ...npm, pi: piResources(files) }),
     })
   }
   return outputs
@@ -747,12 +822,14 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
       contents: json(marketplace(plugins, harness, config)),
     }))
   const entries: PluginInventory[] = []
+  const publish = config.pi.publish && plugins.some((plugin) => plugin.harnesses.includes("pi")) ? readPublishSettings(root) : undefined
   for (const plugin of plugins) {
-    const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config)]
+    // options.json counts as a copy, so a published tree's `files` list names it on the first build too.
+    const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config), ...publishCopies(root, plugin, config), ...optionDefaults(root, plugin)]
     copies.push(...piRulesLoader(root, plugin, copies, config), ...prerequisiteFiles(root, plugin, config))
     const entry = buildInventory(root, plugin, copies, config)
     entries.push(entry)
-    outputs.push(...manifests(root, plugin, config, copies), ...optionDefaults(root, plugin), ...copies)
+    outputs.push(...manifests(root, plugin, config, copies, publish), ...copies)
     outputs.push({ file: path.join(pluginDir(root, plugin), "INVENTORY.md"), contents: pluginInventoryMarkdown(entry, config) })
   }
   outputs.push({ file: path.join(root, "INVENTORY.md"), contents: rootInventoryMarkdown(entries, config) })
@@ -765,15 +842,15 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
   return outputs
 }
 
-/** Files in common-owned directories of a listed harness tree. Any not in a fresh render is stale. */
+/** Files in the directories and root files the build owns in a listed harness tree. Any not in a fresh render is stale. */
 function ownedFiles(root: string, plugins: Plugin[], config: Config): string[] {
   return plugins.flatMap((plugin) =>
-    plugin.harnesses.flatMap((harness) =>
-      [...config.commonDirs, RUNTIME_DIR].flatMap((dir) => {
-        const base = path.join(harnessDir(root, plugin, harness), dir)
-        return listFiles(base).map((file) => path.join(base, file))
-      }),
-    ),
+    plugin.harnesses.flatMap((harness) => {
+      const tree = harnessDir(root, plugin, harness)
+      const inDirs = [...config.commonDirs, RUNTIME_DIR].flatMap((dir) => listFiles(path.join(tree, dir)).map((file) => path.join(tree, dir, file)))
+      const atRoot = ownedRootFiles(harness, config).map((file) => path.join(tree, file)).filter((file) => existsSync(file))
+      return [...inDirs, ...atRoot]
+    }),
   )
 }
 

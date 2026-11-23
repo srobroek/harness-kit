@@ -44,9 +44,11 @@ export type Config = {
     repository?: string
   }
   omp: { packageType?: "module" | "commonjs" }
+  /** `publish`: the generated pi `package.json` is ready for npm (see the README, "Publishing pi packages to npm"). */
+  pi: { publish: boolean }
 }
 
-const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "sharedDir", "pluginKey", "ompScope", "piScope", "generatedBy", "claude", "omp"]
+const TOP_KEYS = ["marketplace", "harnesses", "commonDirs", "kinds", "sharedDir", "pluginKey", "ompScope", "piScope", "generatedBy", "claude", "omp", "pi"]
 const DIR_NAME = /^[a-z0-9][a-z0-9._-]*$/
 const PACKAGE_SCOPE = /^@[a-z0-9][a-z0-9._-]*$/
 
@@ -195,6 +197,16 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
     }
   }
 
+  const pi: Config["pi"] = { publish: false }
+  if (raw.pi !== undefined) {
+    if (!isRecord(raw.pi)) fail(where, '"pi" must be an object')
+    onlyKeys(where, "pi.", raw.pi, ["publish"])
+    if (raw.pi.publish !== undefined) {
+      if (typeof raw.pi.publish !== "boolean") fail(where, '"pi.publish" must be true or false')
+      pi.publish = raw.pi.publish
+    }
+  }
+
   return {
     marketplace: { name, description, owner },
     harnesses,
@@ -207,6 +219,7 @@ export function resolveConfig(raw: unknown, where = CONFIG_FILE): Config {
     generatedBy,
     claude,
     omp,
+    pi,
   }
 }
 

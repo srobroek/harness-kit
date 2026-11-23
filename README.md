@@ -51,6 +51,7 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun ins
 | `claude.author`, `claude.license` | none | Written to a Claude manifest whose `package.json` sets no `author` or `license`. `claude.author` also takes a `url`. |
 | `claude.homepage`, `claude.repository` | none | `http(s)` URLs written to every Claude manifest and Claude marketplace entry. A plugin's own `claude` settings override them. |
 | `omp.packageType` | none | `"module"` or `"commonjs"`: adds `type` to the generated OMP `package.json`. |
+| `pi.publish` | `false` | `true` makes each generated pi `package.json` ready for npm. See "Publishing pi packages to npm". |
 
 ### Plugin settings
 
@@ -300,6 +301,8 @@ The library exports `readPlugins`, `render`, `drift`, `write`, `stampVersion`, `
 
   Its `prepareCmd` runs `harness-kit stamp "$(basename "$PWD")" ${nextRelease.version} --git-add`. Install `semantic-release`, `@anolilab/multi-semantic-release`, `@semantic-release/changelog`, `@semantic-release/exec`, `@semantic-release/git`, `conventional-changelog-conventionalcommits` and `@visulima/yaml` (which multi-semantic-release imports without declaring) as dev dependencies. Keep `.multi-releaserc` (tag format) in your repo.
 
+  Pass `publishPi: true` to publish each plugin's pi tree to npm. See "Publishing pi packages to npm".
+
 ## GitHub workflows
 
 ```yaml
@@ -314,7 +317,48 @@ jobs:
 ```
 
 - `check.yml`: `bun install --frozen-lockfile` when the repo has `bun.lock`, otherwise `npm ci` (so a repo that has not migrated yet keeps working), then `harness-kit check`, `bun test`, `tsc`.
-- `release.yml`: `bun install --frozen-lockfile`, then `multi-semantic-release` with `GITHUB_TOKEN`. Your release config names `@semantic-release/github`.
+- `release.yml`: `bun install --frozen-lockfile`, then `multi-semantic-release` with `GITHUB_TOKEN`. Your release config names `@semantic-release/github`. The workflow requests no permissions of its own: the token has what the calling job grants.
+  - Input `npm-publish` (default `false`): sets up the npm registry and npm 11.5.1 or later, for the preset's `publishPi`. The calling job must also grant `id-token: write`.
+
+### Publishing pi packages to npm
+
+A repo can publish each plugin's pi tree as an npm package, installed with `pi install npm:<piScope>/<name>`. It is off by default, so a repo that must not publish needs nothing. To turn it on, set `"pi": { "publish": true }` in `harness-kit.json`.
+
+`build` then adds these fields to every generated pi `package.json`:
+
+| Field | Value |
+| --- | --- |
+| `license` | The plugin's `package.json` `license`, else the root `package.json` one. One of them is required. |
+| `repository` | `{ "type": "git", "url": <root repository>, "directory": "plugins/<name>/pi" }`. The root `package.json` must have `repository`: a GitHub shorthand (`owner/repo`) or an https URL. npm provenance checks it against the repository that publishes. |
+| `homepage`, `bugs` | Copied from the root `package.json` when it has them. |
+| `files` | Every top-level entry of the tree except `package.json`, `node_modules` and dot-entries: `extensions`, `_kit`, the `commonDirs` copies, `options.json`, `README.md`, `CHANGELOG.md` and `LICENSE`, as present. A file you put in the pi tree ships too. |
+| `publishConfig` | `{ "access": "public", "provenance": true }` |
+| `peerDependencies` | `"*"` for each host package that the tree's own modules import: `@earendil-works/pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui` and `typebox`. pi supplies them, so they are never in `dependencies`. |
+
+The tree also gets copies of the plugin's `README.md` and `CHANGELOG.md` and of the repo's `LICENSE`, when they exist. pi shows a package's `CHANGELOG.md` after an update. `build --check` catches a stale copy. A copy whose source goes away is removed. Turning `pi.publish` off leaves the copies in place; delete them by hand. The generated `package.json` has no `private` and no `dependencies`.
+
+Releases publish through npm trusted publishing (OIDC), with the npm CLI and no `NPM_TOKEN`. bun still installs and runs everything else:
+
+```js
+// release.config.mjs
+export default releaseConfig({ forge: ["@semantic-release/github"], publishPi: true })
+```
+
+```yaml
+  release:
+    uses: srobroek/harness-kit/.github/workflows/release.yml@vX.Y.Z
+    with: { npm-publish: true }
+    permissions: { contents: write, issues: write, pull-requests: write, id-token: write }
+```
+
+`publishPi` adds `publishCmd` to the preset's `@semantic-release/exec` step: `npm publish ./pi --provenance --access public`, run in each released plugin's directory. A plugin without a pi tree publishes nothing. semantic-release runs the publish step after every prepare step, so after the stamp and the pushed release commit.
+
+npm accepts a trusted publisher only for a package that exists, so publish each package's first version by hand, from a clone at its release commit:
+
+1. `npm login` (a session login; no token is stored).
+2. `npm publish ./plugins/<name>/pi --access public --provenance=false`. Provenance works only from CI.
+3. `npm trust github <piScope>/<name> --file <workflow>.yml --repo <owner>/<repo> --allow-publish`. This needs npm 11.15 or later and 2FA. Name your repo's workflow file that calls `release.yml`, not `release.yml` itself: npm checks the calling workflow.
+4. `npm logout`.
 
 ### The workflow tag must match the package version
 

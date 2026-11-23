@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import releaseDefault, { releaseConfig } from "../release.config.js"
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import releaseDefault, { PUBLISH_PI_CMD, releaseConfig } from "../release.config.js"
 
 const names = (config: ReturnType<typeof releaseConfig>) => config.plugins.map((plugin: unknown) => (Array.isArray(plugin) ? plugin[0] : plugin))
 
@@ -45,5 +47,46 @@ describe("release preset", () => {
 
   test.each([["a string", "rules.js"], ["an object", {}], ["null", null]])("rejects releaseRules that are %s", (_label, releaseRules) => {
     expect(() => releaseConfig({ releaseRules: releaseRules as never })).toThrow(/releaseRules/)
+  })
+
+  const exec = (config: ReturnType<typeof releaseConfig>) =>
+    (config.plugins.find((plugin: unknown) => Array.isArray(plugin) && plugin[0] === "@semantic-release/exec") as [string, Record<string, string>])[1]
+
+  test("without publishPi nothing is published to npm", () => {
+    expect(Object.keys(exec(releaseDefault))).toEqual(["prepareCmd"])
+    expect(names(releaseDefault)).not.toContain("@semantic-release/npm")
+  })
+
+  test("publishPi publishes the plugin's pi tree with the npm CLI, after the stamp, with provenance and no token", () => {
+    const config = releaseConfig({ forge: "@semantic-release/github", publishPi: true })
+    expect(exec(config)).toEqual({ prepareCmd: exec(releaseDefault).prepareCmd as string, publishCmd: PUBLISH_PI_CMD })
+    expect(PUBLISH_PI_CMD).toBe("if [ -d pi ]; then npm publish ./pi --provenance --access public; fi")
+    expect(names(config)).toEqual(names(releaseConfig({ forge: "@semantic-release/github" })))
+    expect(JSON.stringify(config)).not.toContain("NPM_TOKEN")
+  })
+
+  test.each([["a string", "yes"], ["null", null]])("rejects publishPi that is %s", (_label, publishPi) => {
+    expect(() => releaseConfig({ publishPi: publishPi as never })).toThrow(/publishPi must be true or false/)
+  })
+})
+
+describe("reusable release workflow", () => {
+  const workflow = Bun.YAML.parse(readFileSync(path.join(import.meta.dir, "..", ".github", "workflows", "release.yml"), "utf8")) as any
+  const steps = workflow.jobs.release.steps as Array<Record<string, any>>
+
+  test("npm-publish is an opt-in boolean input", () => {
+    expect(workflow.on.workflow_call.inputs["npm-publish"]).toMatchObject({ type: "boolean", default: false })
+  })
+
+  test("with npm-publish, setup-node points at the npm registry and npm is upgraded for trusted publishing; no token is passed", () => {
+    const node = steps.find((step) => String(step.uses).startsWith("actions/setup-node@"))
+    expect(node?.with["registry-url"]).toBe("${{ inputs.npm-publish && 'https://registry.npmjs.org' || '' }}")
+    expect(steps.find((step) => step.run === "npm install --global npm@^11.5.1")?.if).toBe("${{ inputs.npm-publish }}")
+    expect(JSON.stringify(workflow)).not.toContain("NPM_TOKEN")
+  })
+
+  test("asks for no permissions itself, so a caller that grants no id-token keeps working", () => {
+    expect(workflow.permissions).toBeUndefined()
+    expect(workflow.jobs.release.permissions).toBeUndefined()
   })
 })

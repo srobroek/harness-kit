@@ -45,7 +45,8 @@ A consumer migrates from npm to bun on its own schedule, so the tooling reads th
 
 ## Approved departures
 
-Bun is the default for installing, running scripts and tests. Two places use npm:
+Bun is the default for installing, running scripts and tests. Three places use npm:
 
 - Publishing stays on npm. `publish.yml` runs `npm publish` (through `@semantic-release/npm`) and upgrades npm first. Publishing uses npm trusted publishing (OIDC) with provenance, and `bun publish` is not confirmed to support it.
+- Consumers' pi packages publish the same way: the release preset's `publishPi` runs `npm publish ./pi --provenance --access public`, and the reusable `release.yml` with `npm-publish: true` installs npm 11.5.1 or later for it. `bun publish` has no provenance or OIDC option.
 - `templates/gitlab-deps-bump.yml` installs bun with `npm install --global bun@1.4.5`, because its image is `node:24` and ships no bun.

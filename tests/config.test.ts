@@ -23,6 +23,7 @@ describe("resolveConfig defaults", () => {
       generatedBy: "harness-kit build",
       claude: { strict: true },
       omp: {},
+      pi: { publish: false },
     })
   })
 
