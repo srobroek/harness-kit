@@ -1,3 +1,9 @@
+## [1.10.1](https://github.com/srobroek/harness-kit/compare/v1.10.0...v1.10.1) (2026-11-24)
+
+### Bug Fixes
+
+* **mcp:** type empty required-environment lists in generated pi MCP servers ([fe553a5](https://github.com/srobroek/harness-kit/commit/fe553a5681134205157ccbdb31630e7e749bc981))
+
 ## [1.10.0](https://github.com/srobroek/harness-kit/compare/v1.9.0...v1.10.0) (2026-11-24)
 
 ### Features
