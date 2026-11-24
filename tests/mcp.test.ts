@@ -77,4 +77,12 @@ describe("MCP output policies", () => {
       else process.env.CONTEXT7_API_KEY = previousContext7
     }
   })
+  test("type-checks the generated Pi extension without required environment variables", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "harness-kit-pi-mcp-empty-required-"))
+    scratch.push(dir)
+    const source = path.join(dir, "extension.ts")
+    writeFileSync(source, piMcpExtension({ keyless: { command: "server" } }))
+    const typecheck = Bun.spawnSync([process.execPath, "x", "tsc", "--noEmit", "--strict", "--target", "ES2023", "--module", "ESNext", "--moduleResolution", "bundler", source])
+    expect(typecheck.exitCode).toBe(0)
+  })
 })
