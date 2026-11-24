@@ -1,3 +1,9 @@
+## [1.10.0](https://github.com/srobroek/harness-kit/compare/v1.9.0...v1.10.0) (2026-11-24)
+
+### Features
+
+* **mcp:** generate per-harness server declarations ([#25](https://github.com/srobroek/harness-kit/issues/25)) ([db72576](https://github.com/srobroek/harness-kit/commit/db7257629672d47dfa5d543f7e2b2ae861c5102c))
+
 ## [1.9.0](https://github.com/srobroek/harness-kit/compare/v1.8.0...v1.9.0) (2026-11-23)
 
 ### Features
