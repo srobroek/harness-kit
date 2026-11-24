@@ -26,6 +26,62 @@ const readJson = (file: string) => JSON.parse(readFileSync(path.join(root, file)
 const read = (file: string) => readFileSync(path.join(root, file), "utf8")
 const demo = (file: string) => path.join("plugins", "demo", file)
 
+
+describe("MCP declarations", () => {
+  test("generates safe declarations per harness and check detects their drift", () => {
+    const manifestPath = path.join(root, demo("package.json"))
+    const manifest = readJson(demo("package.json"))
+    manifest["agent-plugins"].harnesses.push("pi")
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    const source = path.join(root, demo("common/.mcp.json"))
+    mkdirSync(path.dirname(source), { recursive: true })
+    writeFileSync(source, JSON.stringify({
+      mcpServers: {
+        enabled: { command: "enabled-server" },
+        disabled: { command: "disabled-server", enabled: false },
+        keyless: { command: "context7", optionalHeaders: { "x-apikey": "CONTEXT7_API_KEY" }, headers: { "x-apikey": "${CONTEXT7_API_KEY}" } },
+        required: { command: "private-server", env: { API_KEY: "${API_KEY}" }, requiredEnv: ["API_KEY"] },
+        explicitHttp: { type: "http", url: "https://example.com/mcp" },
+        explicitSse: { type: "sse", url: "https://example.com/events" },
+        noTypeCommand: { command: "stdio-server" },
+      },
+    }, null, 2) + "\n")
+    generate()
+    const output = () => render(root, readPlugins(root, config), config).filter((item) => item.file.endsWith("mcp.json") || item.file.endsWith("mcp-servers.ts"))
+    const withoutBuildKey = output().map((item) => item.contents).join("\n")
+    const previous = process.env.API_KEY
+    process.env.API_KEY = "must-not-be-written"
+    try {
+      expect(output().map((item) => item.contents).join("\n")).toBe(withoutBuildKey)
+      expect(output().map((item) => item.contents).join("\n")).not.toContain("must-not-be-written")
+      expect(readJson(demo("claude/.mcp.json")).mcpServers.required.env.API_KEY).toBe("${API_KEY}")
+    } finally {
+      if (previous === undefined) delete process.env.API_KEY
+      else process.env.API_KEY = previous
+    }
+    expect(staleFiles().filter((file) => file.endsWith("mcp.json") || file.endsWith("mcp-servers.ts"))).toEqual([])
+    expect(readJson(demo("pi/package.json")).pi.extensions).toContain("./mcp-servers.ts")
+    expect(readJson(demo("omp/mcp.json")).mcpServers).toMatchObject({
+      enabled: { type: "stdio" },
+      keyless: { type: "stdio" },
+      explicitHttp: { type: "streamable-http", url: "https://example.com/mcp" },
+      explicitSse: { type: "sse", url: "https://example.com/events" },
+      noTypeCommand: { type: "stdio" },
+    })
+    writeFileSync(path.join(root, demo("omp/mcp.json")), "{}\n")
+    expect(staleFiles()).toContain(demo("omp/mcp.json"))
+    rmSync(source)
+    expect(staleFiles().filter((file) => file.endsWith("mcp.json") || file.endsWith("mcp-servers.ts"))).toEqual([demo("claude/.mcp.json"), demo("pi/mcp-servers.ts")].sort())
+  })
+
+  test("fails an invalid OMP transport naming the plugin and server", () => {
+    const source = path.join(root, demo("common/.mcp.json"))
+    mkdirSync(path.dirname(source), { recursive: true })
+    writeFileSync(source, JSON.stringify({ mcpServers: { invalid: {} } }))
+    expect(() => generate()).toThrow('plugin "demo" MCP server "invalid" needs a command or url')
+  })
+})
+
 describe("harness manifests", () => {
   test("claude plugin.json takes name, description and version from package.json", () => {
     generate()

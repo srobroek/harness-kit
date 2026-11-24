@@ -31,6 +31,7 @@ import {
   vendoredSource,
 } from "./runtime"
 import { fail, httpUrl, isRecord, json, nonEmptyString } from "./util"
+import { mcpServersForClaude, mcpServersForOmp, piMcpExtension, type McpServers } from "./mcp"
 
 export type { Harness, Kind }
 export type HarnessInventory = Record<Kind, string[]>
@@ -660,8 +661,9 @@ function generatedIn(root: string, plugin: Plugin, harness: Harness, outputs: re
 
 /** The hand-authored files of a harness tree: everything outside the directories and root files the build owns. */
 function ownFiles(root: string, plugin: Plugin, harness: Harness, config: Config): string[] {
-  const owned = [...config.commonDirs, RUNTIME_DIR]
-  const ownedRoot = ownedRootFiles(plugin, harness, config)
+  const hasMcpSource = commonMcpServers(root, plugin) !== undefined
+  const owned = [...config.commonDirs, RUNTIME_DIR, ...(hasMcpSource ? ["mcp-servers"] : [])]
+  const ownedRoot = [...ownedRootFiles(plugin, harness, config), ...(hasMcpSource && harness === "pi" ? ["mcp-servers.ts"] : [])]
   return listFiles(harnessDir(root, plugin, harness)).filter((file) => !owned.some((dir) => file.startsWith(`${dir}/`)) && !ownedRoot.includes(file))
 }
 
@@ -680,6 +682,7 @@ function treeFiles(root: string, plugin: Plugin, harness: Harness, generated: st
 function piResources(files: readonly string[]): Record<string, unknown> {
   const extensions = [
     ...files.filter((file) => /^extensions\/[^/]+$/.test(file) && MODULE_EXTENSION.test(file)),
+    ...files.filter((file) => file === "mcp-servers.ts"),
     ...files.filter((file) => file === `${RUNTIME_DIR}/${PI_RULES_LOADER}`),
   ].map((file) => `./${file}`)
   extensions.push(...prereqsEntry(files))
@@ -734,6 +737,50 @@ function claudeLinks(plugin: Plugin, config: Config): { homepage?: string; repos
     homepage: plugin.claude?.homepage ?? config.claude.homepage,
     repository: plugin.claude?.repository ?? config.claude.repository,
   }
+}
+
+const MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+
+/** The common MCP source is a shared, per-plugin declaration, separate from commonDirs. */
+function commonMcpServers(root: string, plugin: Plugin): McpServers | undefined {
+  const file = path.join(pluginDir(root, plugin), "common", ".mcp.json")
+  if (!existsSync(file)) return undefined
+  let raw: unknown
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8"))
+  } catch (error) {
+    fail(`plugins/${plugin.name}/common/.mcp.json`, `is not valid JSON (${error instanceof Error ? error.message : String(error)})`)
+  }
+  if (!isRecord(raw) || !isRecord(raw.mcpServers)) fail(`plugins/${plugin.name}/common/.mcp.json`, 'must contain an "mcpServers" object')
+  const servers: McpServers = {}
+  for (const [name, value] of Object.entries(raw.mcpServers)) {
+    if (!isRecord(value)) fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}" must be an object`)
+    if (value.requiredEnv !== undefined && (!Array.isArray(value.requiredEnv) || value.requiredEnv.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))) fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}.requiredEnv" must be an array of environment variable names`)
+    if (value.optionalHeaders !== undefined && (!isRecord(value.optionalHeaders) || Object.entries(value.optionalHeaders).some(([header, key]) => !header || typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))) fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}.optionalHeaders" must map HTTP header names to environment variable names`)
+    if (value.enabled !== undefined && typeof value.enabled !== "boolean") fail(`plugins/${plugin.name}/common/.mcp.json`, `"mcpServers.${name}.enabled" must be true or false`)
+    servers[name] = value
+  }
+  return servers
+}
+
+function ompMcpOutputs(root: string, plugin: Plugin, servers: McpServers): Output[] {
+  return [{
+    file: path.join(harnessDir(root, plugin, "omp"), "mcp.json"),
+    contents: json({ $schema: MCP_SCHEMA, mcpServers: mcpServersForOmp(servers, plugin.name) }),
+  }]
+}
+
+function mcpOutputs(root: string, plugin: Plugin): Output[] {
+  const servers = commonMcpServers(root, plugin)
+  if (!servers) return []
+  const outputs: Output[] = []
+  if (plugin.harnesses.includes("omp")) outputs.push(...ompMcpOutputs(root, plugin, servers))
+  if (plugin.harnesses.includes("claude")) outputs.push({
+    file: path.join(harnessDir(root, plugin, "claude"), ".mcp.json"),
+    contents: json({ $schema: MCP_SCHEMA, mcpServers: mcpServersForClaude(servers) }),
+  })
+  if (plugin.harnesses.includes("pi")) outputs.push({ file: path.join(harnessDir(root, plugin, "pi"), "mcp-servers.ts"), contents: piMcpExtension(servers) })
+  return outputs
 }
 
 function manifests(root: string, plugin: Plugin, config: Config, copies: readonly Output[], publish?: PublishSettings): Output[] {
@@ -838,9 +885,16 @@ function inventoryOf(root: string, plugin: Plugin, harness: Harness, generated: 
         ? names("extensions", (rest) => MODULE_EXTENSION.test(rest) && !rest.includes("/")).map(stripExtension)
         : []
 
-  const mcpConfig = readJsonFile(path.join(dir, ".mcp.json"))
+  const pluginMcp = commonMcpServers(root, plugin)
+  const mcpConfig = harness === "claude" && pluginMcp !== undefined ? undefined : readJsonFile(path.join(dir, ".mcp.json"))
   const mcp = isRecord(mcpConfig) ? Object.keys(isRecord(mcpConfig.mcpServers) ? mcpConfig.mcpServers : mcpConfig) : []
-
+  if (harness === "omp") {
+    const existing = pluginMcp === undefined ? readJsonFile(path.join(dir, "mcp.json")) : undefined
+    if (isRecord(existing) && isRecord(existing.mcpServers)) mcp.push(...Object.keys(existing.mcpServers))
+    if (pluginMcp !== undefined) mcp.push(...Object.keys(mcpServersForOmp(pluginMcp, plugin.name)))
+  }
+  if (harness === "claude" && pluginMcp !== undefined) mcp.push(...Object.keys(mcpServersForClaude(pluginMcp)))
+  if (harness === "pi" && files.includes("mcp-servers.ts") && pluginMcp) mcp.push(...Object.keys(Object.fromEntries(Object.entries(pluginMcp).filter(([, server]) => server.enabled !== false))))
   const unique = (list: string[]) => [...new Set(list)].sort()
   const found: HarnessInventory = {
     skills: unique(skills),
@@ -943,7 +997,7 @@ export function render(root: string, plugins: Plugin[], config: Config): Output[
   const publish = config.pi.publish && plugins.some((plugin) => plugin.harnesses.includes("pi")) ? readPublishSettings(root) : undefined
   for (const plugin of plugins) {
     // options.json counts as a copy, so a published tree's `files` list names it on the first build too.
-    const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config), ...piRootCopies(root, plugin, config), ...optionDefaults(root, plugin)]
+    const copies = [...ownedCopies(root, plugin, config), ...runtimeCopies(root, plugin, config), ...piRootCopies(root, plugin, config), ...optionDefaults(root, plugin), ...mcpOutputs(root, plugin)]
     copies.push(...piRulesLoader(root, plugin, copies, config), ...prerequisiteFiles(root, plugin, config))
     const entry = buildInventory(root, plugin, copies, config)
     entries.push(entry)
@@ -965,8 +1019,20 @@ function ownedFiles(root: string, plugins: Plugin[], config: Config): string[] {
   return plugins.flatMap((plugin) =>
     plugin.harnesses.flatMap((harness) => {
       const tree = harnessDir(root, plugin, harness)
-      const inDirs = [...config.commonDirs, RUNTIME_DIR].flatMap((dir) => listFiles(path.join(tree, dir)).map((file) => path.join(tree, dir, file)))
-      const atRoot = ownedRootFiles(plugin, harness, config).map((file) => path.join(tree, file)).filter((file) => existsSync(file))
+      const isMcpOutput = (file: string) => {
+        if (harness === "pi" && file === "mcp-servers.ts") return existsSync(path.join(tree, file)) && readFileSync(path.join(tree, file), "utf8").startsWith("// Generated by harness-kit.")
+        if ((harness === "omp" && file === "mcp.json") || (harness === "claude" && file === ".mcp.json")) {
+          try {
+            const output = readJsonFile(path.join(tree, file))
+            return isRecord(output) && output.$schema === MCP_SCHEMA
+          } catch {
+            return false
+          }
+        }
+        return false
+      }
+      const inDirs = [...config.commonDirs, RUNTIME_DIR, "mcp-servers"].flatMap((dir) => listFiles(path.join(tree, dir)).filter((file) => dir !== "mcp-servers" || isMcpOutput(file)).map((file) => path.join(tree, dir, file)))
+      const atRoot = [...ownedRootFiles(plugin, harness, config), ...listFiles(tree).filter(isMcpOutput)].map((file) => path.join(tree, file)).filter((file) => existsSync(file))
       return [...inDirs, ...atRoot]
     }),
   )

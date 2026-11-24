@@ -54,6 +54,33 @@ bun must be on `PATH`, because the `harness-kit` bin has a bun shebang. `bun ins
 | `omp.packageType` | none | `"module"` or `"commonjs"`: adds `type` to the generated OMP `package.json`. |
 | `pi.publish` | `false` | `true` makes each generated pi `package.json` ready for npm. See "Publishing pi packages to npm". |
 
+### MCP servers
+
+Declare shared MCP servers in `plugins/<name>/common/.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "docs": { "command": "docs-mcp" },
+    "context7": { "command": "context7-mcp", "optionalHeaders": { "x-apikey": "CONTEXT7_API_KEY" } },
+    "private": { "command": "private-mcp", "env": { "API_KEY": "${API_KEY}" }, "requiredEnv": ["API_KEY"] },
+    "disabled": { "command": "optional-mcp", "enabled": false }
+  }
+}
+```
+
+If the user sets the variable, Pi adds the optional header. OMP omits servers with `requiredEnv` because plugin MCP configs do not expand environment variables. Users can add those servers to `~/.omp/agent/mcp.json`, where OMP expands `${VAR}` at load time. Claude retains required `${VAR}` placeholders in plugin MCP configs. When a variable is unset, Claude warns for stdio servers and leaves the placeholder literal. Remote `url` and `headers` values can resolve to empty strings.
+
+`requiredEnv` lists variables the server needs. OMP omits those servers from generated `mcp.json`. Claude includes the server with its placeholders for load-time expansion. Pi checks these variables at startup. A `${VAR}` placeholder alone does not mean the server needs a credential. Set `enabled` to `false` to disable a server in each generated harness.
+
+`build` writes OMP `mcp.json`, Claude `.mcp.json`, and a Pi `mcp-servers.ts` extension. The MCP inventory lists servers per harness. `build --check` detects changed or stale outputs. Pi extensions register servers with `pi.registerMcpServer`. See [Pi's MCP extension API](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md#mcp-servers).
+
+Set credentials in each harness's user scope:
+
+- **OMP:** add an `mcpServers` entry in `~/.omp/agent/mcp.json` for servers that require credentials.
+- **Claude:** add the server in Claude's user-scope MCP configuration.
+- **Pi:** If you set `requiredEnv`, Pi checks the variable at startup. If you also set the optional header's variable, Pi adds that header.
+
 ### Plugin settings
 
 Each plugin's `package.json` carries `name` (equal to the directory), `version`, and the `agent-plugins` key (or your `pluginKey`) with `description`, `category`, `harnesses`, and optionally `scope`, `discrepancies`, `claudeName`, `options` or `userConfig`. Standard `author` and `license` fields go into the Claude manifest.
