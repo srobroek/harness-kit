@@ -223,30 +223,35 @@ describe("the vendored rules loader", () => {
     const vendored = (await import(demo("pi/_kit/rules.ts"))) as typeof import("../runtime/pi/rules.ts")
     const pi = fakePi()
     vendored.default(pi.api)
-    return pi
+    return { pi, vendored }
   }
-  const run = async () => (await load()).emit("before_agent_start", { systemPrompt: "BASE" }).map((result) => result.systemPrompt)
 
-  test("appends always-on rules in full and indexes the others with their absolute path, the same text on every run", async () => {
+  test("one section per package: always-on rules in full, the others indexed with globs and absolute path, the same text on every run", async () => {
     put("common/rules/on-demand.md", "---\ndescription: Read before editing fixtures.\n---\nOn-demand body.\n")
+    put("common/rules/go-style.md", "---\ndescription: Go style.\nglobs: '*.go'\n---\nWrap errors with %w.\n")
     generate()
-    const [prompt] = await run()
-    expect(prompt).toBe(
-      [
-        "BASE",
+    expect(read("pi/rules/go-style.md")).toBe(read("common/rules/go-style.md"))
+    const { pi, vendored } = await load()
+    // The loader finds rules/ from its own location, which the OS reports with symlinks resolved.
+    const rule = (name: string) => realpathSync(demo(`pi/rules/${name}.md`))
+    const sections = pi.sections()
+    expect(sections).toEqual({
+      [vendored.sectionName(readJson("pi/package.json").name)]: [
         "## Rule: demo-rule\n\n# Demo rule\n\nKeep fixtures tiny.",
-        // The loader finds rules/ from its own location, which the OS reports with symlinks resolved.
-        `## Rules to read on demand\n\nRead a rule's file before work that its description covers.\n\n- on-demand: Read before editing fixtures. (${realpathSync(demo("pi/rules/on-demand.md"))})`,
+        "## Rules to read on demand",
+        "Read a rule's file before work that its description covers.",
+        `- go-style (*.go): Go style. (${rule("go-style")})\n- on-demand: Read before editing fixtures. (${rule("on-demand")})`,
       ].join("\n\n"),
-    )
-    expect(prompt).not.toContain("On-demand body.")
-    expect(await run()).toEqual([prompt as string])
+    })
+    expect(pi.sections()).toEqual(sections)
+    expect(pi.emit("tool_call", { toolName: "read", toolCallId: "1", input: { path: "main.go" } })).toEqual([undefined])
+    expect(pi.emit("tool_result", { toolCallId: "1", content: [] })[0].content[0].text).toBe("This call's file falls under the rule below.\n\n## Rule: go-style\n\nWrap errors with %w.")
   })
 
   test("enforces a triggered rule from the generated tree: the first matching bash call is blocked with the rule", async () => {
     put("common/rules/no-frobnicate.md", '---\ndescription: Never frobnicate.\ncondition: ["\\\\bfrobnicate-edit\\\\b"]\nscope: "tool:bash"\ninterruptMode: always\n---\nUse frobnicate-set instead.\n')
     generate()
-    const pi = await load()
+    const { pi } = await load()
     const call = { toolName: "bash", toolCallId: "1", input: { command: "frobnicate-edit x" } }
     const [blocked] = pi.emit("tool_call", call)
     expect(blocked.block).toBe(true)

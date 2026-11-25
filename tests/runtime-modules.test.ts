@@ -5,7 +5,7 @@ import { loadPrompt, loadRules, loadSkills, renderTemplate, resolveOptions } fro
 import { isRecord, parseFrontmatter } from "../runtime/opencode/frontmatter.ts"
 import { createRootResolver, rootOf } from "../runtime/opencode/session.ts"
 import { agentDir, render, resolveOptions as resolveOmpOptions, templateExtension } from "../runtime/omp/template-extension.ts"
-import rulesExtension, { loadRules as loadPiRules, matchesToolCall, parseRule } from "../runtime/pi/rules.ts"
+import rulesExtension, { loadRules as loadPiRules, matchesFile, matchesToolCall, packageId, parseRule, sectionName } from "../runtime/pi/rules.ts"
 import { cleanup, fakePi, tempDir } from "./helpers"
 
 afterEach(cleanup)
@@ -162,42 +162,167 @@ describe("pi rules extension", () => {
     rulesExtension(pi.api, { root, warn: (text) => void warnings.push(text) })
     return pi
   }
-  const prompts = (root: string) => load(root).emit("before_agent_start", { systemPrompt: "BASE" }).map((result) => result.systemPrompt)
+  /** The text of the one section the rules set; a tree without package.json is named after its directory. */
+  const section = (root: string) => {
+    const sections = load(root).sections()
+    expect(Object.keys(sections)).toEqual([sectionName(path.basename(root))])
+    return Object.values(sections)[0]
+  }
 
   test("puts an alwaysApply rule in full and another rule as an index line with its absolute path", () => {
     const root = tree({
       "rules/b-on-demand.md": "---\ndescription: 'Read before touching the API.'\n---\nOn-demand body.\n",
       "rules/a-always.md": "---\nalwaysApply: true\n---\n\nAlways keep the build green.\n",
     })
-    const [prompt] = prompts(root)
-    expect(prompt).toBe(
+    const text = section(root)
+    expect(text).toBe(
       [
-        "BASE",
         "## Rule: a-always\n\nAlways keep the build green.",
         `## Rules to read on demand\n\nRead a rule's file before work that its description covers.\n\n- b-on-demand: Read before touching the API. (${path.join(root, "rules", "b-on-demand.md")})`,
       ].join("\n\n"),
     )
-    expect(prompt).not.toContain("On-demand body.")
+    expect(text).not.toContain("On-demand body.")
   })
 
   test("the text is deterministic: rules sort by file name, whatever order they were written in", () => {
-    const one = tree({ "rules/z.md": "---\nalwaysApply: true\n---\nZ\n", "rules/a.md": "---\nalwaysApply: true\n---\nA\n", "rules/sub/m.md": "---\nalwaysApply: true\n---\nM\n" })
-    const two = tree({ "rules/sub/m.md": "---\nalwaysApply: true\n---\nM\n", "rules/a.md": "---\nalwaysApply: true\n---\nA\n", "rules/z.md": "---\nalwaysApply: true\n---\nZ\n" })
-    const [first] = prompts(one)
-    expect(first).toBe("BASE\n\n## Rule: a\n\nA\n\n## Rule: sub/m\n\nM\n\n## Rule: z\n\nZ")
-    expect(prompts(two)).toEqual([first as string])
-    expect(prompts(one)).toEqual([first as string])
+    const files = (order: string[]) => Object.fromEntries(order.map((name) => [`rules/${name}.md`, `---\nalwaysApply: true\n---\n${name.slice(-1).toUpperCase()}\n`]))
+    const one = tree({ ...files(["z", "a", "sub/m"]), "package.json": '{"name":"rules-pkg"}' })
+    const two = tree({ ...files(["sub/m", "a", "z"]), "package.json": '{"name":"rules-pkg"}' })
+    const first = load(one).sections()
+    expect(first).toEqual({ "rules_rules-pkg": "## Rule: a\n\nA\n\n## Rule: sub/m\n\nM\n\n## Rule: z\n\nZ" })
+    expect(load(two).sections()).toEqual(first)
+    const pi = load(one)
+    expect([pi.sections(), pi.sections()]).toEqual([first, first])
   })
 
-  test("registers nothing without rules, and no trigger handlers without triggered rules", () => {
+  test("the section is named after the package, in the form pi accepts, after the sections already set", () => {
+    expect(sectionName("@srobroek/pi-workflow-rules")).toBe("rules_srobroek_pi-workflow-rules")
+    for (const name of ["@Scope/Pkg.Name", "plain", "x~y", "9lives"]) expect(sectionName(name)).toMatch(/^[a-z][a-z0-9_-]*$/)
+    const root = tree({ "package.json": '{"name":"@srobroek/pi-workflow-rules"}', "rules/a.md": "A\n" })
+    expect(packageId(root)).toBe("@srobroek/pi-workflow-rules")
+    expect(packageId(tree({}))).toMatch(/^harness-kit-test-/)
+    expect(Object.keys(load(root).sections({ tools: "T", rules: "pi's own" }))).toEqual(["tools", "rules", "rules_srobroek_pi-workflow-rules"])
+  })
+
+  test("registers nothing without rules, and no trigger handlers without triggered rules or globs", () => {
     expect([...load(tree({ "skills/x/SKILL.md": "x" })).handlers.keys()]).toEqual([])
-    expect([...load(tree({ "rules/a.md": "---\ndescription: d\n---\nA\n" })).handlers.keys()]).toEqual(["before_agent_start"])
+    expect([...load(tree({ "rules/a.md": "---\ndescription: d\n---\nA\n" })).handlers.keys()]).toEqual(["session_shutdown", "before_agent_start"])
     expect(loadPiRules("/nonexistent/rules")).toEqual([])
   })
 
   test("parseRule reads alwaysApply only when it is true, and a rule without front matter is on demand", () => {
     expect(parseRule("r", "/r.md", "---\nalwaysApply: false\ndescription: \"x\"\n---\nBody\n")).toEqual({ name: "r", file: "/r.md", alwaysApply: false, description: "x", body: "Body" })
     expect(parseRule("r", "/r.md", "Plain\n")).toEqual({ name: "r", file: "/r.md", alwaysApply: false, body: "Plain" })
+  })
+})
+
+describe("pi rules loaded twice", () => {
+  const PACKAGE = '{"name":"@acme/pi-rules"}'
+  const BLOCK = '---\ndescription: No frobnicating.\ncondition: ["frobnicate"]\nscope: "tool:bash"\n---\nUse frobnicate-set.\n'
+  /** Two copies of one package, as when it is installed for the user and for the project. */
+  const copies = (files: Record<string, string>) => [tree({ "package.json": PACKAGE, ...files }), tree({ "package.json": PACKAGE, ...files })]
+
+  test("in one session, the first copy sets the section and the second adds nothing", () => {
+    const pi = fakePi()
+    const [first, second] = copies({ "rules/a.md": "---\ndescription: d\n---\nA\n" })
+    rulesExtension(pi.api, { root: first })
+    rulesExtension(pi.api, { root: second })
+    const sections = pi.sections()
+    expect(Object.keys(sections)).toEqual(["rules_acme_pi-rules"])
+    expect(sections["rules_acme_pi-rules"]).toContain(path.join(first as string, "rules", "a.md"))
+    expect(pi.sections()).toEqual(sections)
+  })
+
+  test("in one session, a triggered rule blocks once, not once per copy", () => {
+    const pi = fakePi()
+    for (const root of copies({ "rules/no-frob.md": BLOCK })) rulesExtension(pi.api, { root })
+    const call = (id: string) => pi.emit("tool_call", { toolName: "bash", toolCallId: id, input: { command: "frobnicate x" } })
+    expect(call("1").filter((result) => result?.block)).toHaveLength(1)
+    expect(call("2")).toEqual([undefined, undefined])
+  })
+
+  test("each session, such as a subagent's, is owned by the copy loaded into it", () => {
+    const [root] = copies({ "rules/a.md": "---\nalwaysApply: true\n---\nA\n", "rules/no-frob.md": BLOCK })
+    const parent = fakePi()
+    const child = fakePi()
+    rulesExtension(parent.api, { root })
+    rulesExtension(child.api, { root })
+    expect(child.sections()).toEqual(parent.sections())
+    for (const pi of [parent, child]) expect(pi.emit("tool_call", { toolName: "bash", toolCallId: "1", input: { command: "frobnicate x" } })[0]?.block).toBe(true)
+  })
+})
+
+describe("pi rules with globs", () => {
+  const GO = "---\ndescription: Go style.\nglobs: '*.go, cmd/**/*.go'\n---\nWrap errors with %w.\n"
+  const load = (files: Record<string, string>) => {
+    const pi = fakePi()
+    rulesExtension(pi.api, { root: tree(files) })
+    return pi
+  }
+  const result = (pi: ReturnType<typeof fakePi>, toolName: string, input: Record<string, unknown>, id: string) => {
+    expect(pi.emit("tool_call", { toolName, toolCallId: id, input })).toEqual([undefined])
+    return pi.emit("tool_result", { toolCallId: id, content: [{ type: "text", text: "done" }] })[0]
+  }
+
+  test("globs are a glob, a comma-separated string or a list, and a comma inside braces stays in its glob", () => {
+    expect(parseRule("r", "/r.md", GO).globs).toEqual(["*.go", "cmd/**/*.go"])
+    expect(parseRule("r", "/r.md", "---\nglobs:\n  - '*.ts'\n  - docs/**\n---\nB\n").globs).toEqual(["*.ts", "docs/**"])
+    expect(parseRule("r", "/r.md", "---\nglobs: ['src/*.{ts,tsx}']\n---\nB\n").globs).toEqual(["src/*.{ts,tsx}"])
+    expect(parseRule("r", "/r.md", "---\nglobs: '[z-a].go'\ndescription: d\n---\nB\n").problem).toMatch(/^invalid glob "\[z-a\]\.go"/)
+  })
+
+  test("matchesFile takes read, edit and write paths as given, absolute, relative to the cwd or by base name", () => {
+    const paths = parseRule("r", "/r.md", GO).paths ?? []
+    expect(matchesFile(paths, "read", { path: "pkg/a.go" }, "/repo")).toBe(true)
+    expect(matchesFile(paths, "edit", { path: "/repo/cmd/x/main.go" }, "/repo")).toBe(true)
+    expect(matchesFile(paths, "write", { path: "a.go.md" }, "/repo")).toBe(false)
+    expect(matchesFile(paths, "bash", { command: "cat a.go" }, "/repo")).toBe(false)
+    expect(matchesFile(paths, "read", {}, "/repo")).toBe(false)
+  })
+
+  test("the index line names the globs, and the body stays out of the system prompt", () => {
+    const text = Object.values(load({ "rules/go-style.md": GO }).sections())[0]
+    expect(text).toMatch(/^## Rules to read on demand\n\n.*\n\n- go-style \(\*\.go, cmd\/\*\*\/\*\.go\): Go style\. \(.*go-style\.md\)$/s)
+    expect(text).not.toContain("Wrap errors")
+  })
+
+  test("the first matching read, edit or write gets the rule appended to its result, once per session", () => {
+    const pi = load({ "rules/go-style.md": GO, "rules/notes.md": "---\ndescription: Notes.\n---\nN\n" })
+    expect(result(pi, "read", { path: "README.md" }, "1")).toBeUndefined()
+    expect(result(pi, "bash", { command: "go build ./..." }, "2")).toBeUndefined()
+    expect(result(pi, "read", { path: "pkg/a.go" }, "3")).toEqual({
+      content: [
+        { type: "text", text: "done" },
+        { type: "text", text: "This call's file falls under the rule below.\n\n## Rule: go-style\n\nWrap errors with %w." },
+      ],
+    })
+    expect(result(pi, "edit", { path: "pkg/b.go", edits: [] }, "4")).toBeUndefined()
+    pi.emit("session_start", {})
+    expect(result(pi, "write", { path: "c.go", content: "" }, "5")?.content[1].text).toContain("## Rule: go-style")
+  })
+
+  test("an alwaysApply rule with globs is in the prompt only, and a blocked call leaves the globs rule for its retry", () => {
+    const pi = load({
+      "rules/always.md": "---\nalwaysApply: true\nglobs: '*.md'\n---\nAlways.\n",
+      "rules/docs.md": "---\ndescription: Docs.\nglobs: '*.md'\n---\nDocs body.\n",
+      "rules/no-todo.md": '---\ndescription: No TODO.\ncondition: ["TODO"]\nscope: "tool:write"\n---\nFinish it.\n',
+    })
+    const write = { toolName: "write", toolCallId: "1", input: { path: "a.md", content: "TODO" } }
+    expect(pi.emit("tool_call", write)[0]?.block).toBe(true)
+    const text = result(pi, "write", { path: "a.md", content: "TODO" }, "2")?.content[1].text
+    expect(text).toBe("This call's file falls under the rule below.\n\n## Rule: docs\n\nDocs body.")
+  })
+
+  test("as in OMP, globs gate a triggered rule on the call's path and drop its prose scopes", () => {
+    const trigger = parseRule("r", "/r.md", '---\ncondition: "as any"\nglobs: "*.ts"\n---\nB\n').trigger
+    if (!trigger) throw new Error("no trigger")
+    expect({ text: trigger.text, thinking: trigger.thinking, tools: trigger.tools.length }).toEqual({ text: false, thinking: false, tools: 4 })
+    expect(matchesToolCall(trigger, "edit", { path: "src/a.ts", newText: "x as any" }, "/repo")).toBe(true)
+    expect(matchesToolCall(trigger, "edit", { path: "src/a.md", newText: "x as any" }, "/repo")).toBe(false)
+    expect(matchesToolCall(trigger, "bash", { command: "echo as any" }, "/repo")).toBe(false)
+    expect(parseRule("r", "/r.md", '---\ncondition: "x"\nscope: text\nglobs: "*.ts"\n---\nB\n').trigger).toBeUndefined()
+    const pi = load({ "rules/typed.md": '---\ndescription: Typed.\ncondition: "as any"\nscope: "tool:edit"\nglobs: "*.ts"\ninterruptMode: never\n---\nNo any.\n' })
+    expect(result(pi, "edit", { path: "a.ts", newText: "as any" }, "1")?.content[1].text).toBe("This call matched the rule below.\n\n## Rule: typed\n\nNo any.")
   })
 })
 
@@ -254,8 +379,8 @@ describe("pi rule triggers", () => {
       expect(corpus["srobroek-package-investigate"]?.problem).toBeUndefined()
       expect(rule('condition: ["x"]\nscope: "tool:eval"').trigger).toBeUndefined()
       const pi = load({ "rules/never.md": readFileSync(path.join(CORPUS, "srobroek-package-investigate.md"), "utf8") })
-      expect([...pi.handlers.keys()]).toEqual(["before_agent_start"])
-      expect(pi.emit("before_agent_start", { systemPrompt: "" })[0].systemPrompt).toContain("- never: Before adding or changing a dependency")
+      expect([...pi.handlers.keys()]).toEqual(["session_shutdown", "before_agent_start"])
+      expect(Object.values(pi.sections())[0]).toContain("- never: Before adding or changing a dependency")
     })
 
     test("an invalid regex skips the trigger, keeps the rule in the index, and warns once at load", () => {
@@ -265,7 +390,7 @@ describe("pi rule triggers", () => {
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain("bad.md: invalid condition")
       expect(pi.handlers.has("tool_call")).toBe(false)
-      expect(pi.emit("before_agent_start", { systemPrompt: "" })[0].systemPrompt).toContain("- bad: Bad.")
+      expect(Object.values(pi.sections())[0]).toContain("- bad: Bad.")
     })
 
     test("no scope means text and every tool, not thinking", () => {

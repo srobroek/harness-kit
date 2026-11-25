@@ -6,9 +6,13 @@ import { fileURLToPath } from "node:url"
  * A pi extension that puts a plugin's rules into the system prompt and enforces their triggers, since pi has no rules
  * resource. harness-kit copies the plugin's rules to `rules/` in its pi tree and vendors this file as `_kit/rules.ts`.
  *
- * Before each prompt (`before_agent_start`) it appends, in file-name order, every rule whose front matter says
- * `alwaysApply: true` in full under a heading that names it, then one line per other rule with its description and the
- * absolute path to read it from. The rules are read once, when pi loads the extension, so the text stays the same.
+ * Before each prompt (`before_agent_start`) it sets one system prompt section, named after the package (`sectionName`),
+ * to every rule whose front matter says `alwaysApply: true` in full under a heading that names it, then one line per
+ * other rule with its `globs`, its description and the absolute path to read it from, in file-name order. The rules are
+ * read once, when pi loads the extension, so the section is the same on every run and pi sends no patch for it.
+ *
+ * A rule with `globs` and no trigger is delivered once per session, appended to the result of the first `read`, `edit`
+ * or `write` call whose path matches one of them. It never enters the system prompt.
  *
  * A rule with OMP's trigger front matter (`condition`, `scope`, `interruptMode`) also fires, at most once per session:
  * - Tool scopes (`tool:bash`, `tool:edit`, `tool:write`, `tool:read`, each optionally `(<glob>)`; `tool` for all four):
@@ -18,8 +22,12 @@ import { fileURLToPath } from "node:url"
  * - `text` and `thinking`: a streamed reply or reasoning that matches gets the rule as a steering message. pi delivers a
  *   steer after the current turn's tool calls; aborting would return the queued message to the editor instead of
  *   starting a turn, so an interrupting rule steers without aborting.
- * No `scope` means `text` and every tool. Tools pi lacks (`tool:eval`) are skipped. A rule with no usable scope, only the
- * never-matching `(?!)`, or an invalid condition (reported once) is in the index only.
+ * No `scope` means `text` and every tool. Tools pi lacks (`tool:eval`) are skipped. As in OMP, `globs` on a triggered
+ * rule gate every match on the call's path, so such a rule fires on path-bearing tool calls only. A rule with no usable
+ * scope, only the never-matching `(?!)`, or an invalid condition or glob (reported once) is in the index only.
+ *
+ * Loading the extension twice in one session, from two copies of the package, is safe: the first copy to see the session
+ * owns it, and the others do nothing in it.
  */
 
 type Interrupt = "always" | "never" | "prose-only" | "tool-only"
@@ -27,6 +35,8 @@ type ToolName = "bash" | "edit" | "write" | "read"
 type Source = "text" | "thinking"
 
 const TOOLS: readonly ToolName[] = ["bash", "edit", "write", "read"]
+/** The tools whose `path` names one file. */
+const FILE_TOOLS: readonly string[] = ["edit", "write", "read"]
 
 export interface ToolScope {
 	tool: ToolName
@@ -40,6 +50,8 @@ export interface Trigger {
 	text: boolean
 	thinking: boolean
 	interrupt: Interrupt
+	/** The rule's `globs`: a call must also have a path that one of them matches. */
+	paths?: RegExp[]
 }
 
 export interface Rule {
@@ -49,11 +61,21 @@ export interface Rule {
 	file: string
 	alwaysApply: boolean
 	description?: string
+	/** The `globs` front matter as written, one entry per glob. */
+	globs?: string[]
+	/** `globs` as anchored regexes, in the same order. */
+	paths?: RegExp[]
 	/** The text after the front matter, trimmed. */
 	body: string
 	trigger?: Trigger
-	/** Why the rule's trigger is not enforced, when its front matter cannot be used. */
+	/** Why the rule's trigger or globs are not enforced, when its front matter cannot be used. */
 	problem?: string
+}
+
+/** The slice of pi's extension context this file uses. */
+interface Context {
+	cwd: string
+	sessionManager: { getSessionId(): string }
 }
 
 interface ToolCallEvent {
@@ -80,12 +102,12 @@ interface CustomMessage {
 
 /** The slice of the pi extension API this file uses. */
 interface Api {
-	on(event: "before_agent_start", handler: (event: { systemPrompt: string }) => { systemPrompt: string }): void
-	on(event: "session_start", handler: () => void): void
-	on(event: "tool_call", handler: (event: ToolCallEvent, ctx: { cwd: string }) => { block: true; reason: string } | undefined): void
-	on(event: "tool_result", handler: (event: ToolResultEvent) => { content: unknown[]; structuredContent?: unknown } | undefined): void
-	on(event: "message_start", handler: (event: { message?: { role?: string } }) => void): void
-	on(event: "message_update", handler: (event: MessageUpdateEvent) => void): void
+	on(event: "before_agent_start", handler: (event: { systemPromptOptions: { sections: Record<string, string> } }, ctx: Context) => void): void
+	on(event: "session_start" | "session_shutdown", handler: (event: unknown, ctx: Context) => void): void
+	on(event: "tool_call", handler: (event: ToolCallEvent, ctx: Context) => { block: true; reason: string } | undefined): void
+	on(event: "tool_result", handler: (event: ToolResultEvent, ctx: Context) => { content: unknown[]; structuredContent?: unknown } | undefined): void
+	on(event: "message_start", handler: (event: { message?: { role?: string } }, ctx: Context) => void): void
+	on(event: "message_update", handler: (event: MessageUpdateEvent, ctx: Context) => void): void
 	sendMessage(message: CustomMessage, options: { deliverAs: "steer" }): void
 }
 
@@ -286,8 +308,11 @@ function scopeTokens(text: string): string[] {
 	return tokens.map((token) => token.trim()).filter(Boolean)
 }
 
-/** The rule's trigger, none when it has no usable condition or scope, or a problem that stops it being enforced. */
-function compileTrigger({ values, errors }: Fields): { trigger?: Trigger; problem?: string } {
+/**
+ * The rule's trigger, none when it has no usable condition or scope, or a problem that stops it being enforced. `paths`
+ * are the rule's globs: they gate every match on a path, so prose scopes, which have none, are dropped.
+ */
+function compileTrigger({ values, errors }: Fields, paths?: RegExp[]): { trigger?: Trigger; problem?: string } {
 	if (values.condition === undefined) return {}
 	const unreadable = ["condition", "scope"].filter((key) => errors[key])
 	if (unreadable.length > 0) return { problem: unreadable.map((key) => `${key} cannot be read (${errors[key]})`).join("; ") }
@@ -308,10 +333,10 @@ function compileTrigger({ values, errors }: Fields): { trigger?: Trigger; proble
 	if (conditions.length === 0) return {}
 
 	const scope = values.scope === undefined ? ["text", "tool"] : typeof values.scope === "string" ? scopeTokens(values.scope) : values.scope.flatMap(scopeTokens)
-	const trigger: Trigger = { conditions, tools: [], text: false, thinking: false, interrupt: "always" }
+	const trigger: Trigger = { conditions, tools: [], text: false, thinking: false, interrupt: "always", ...(paths ? { paths } : {}) }
 	for (const token of scope) {
 		const tool = /^tool:([\w-]+)(?:\((.*)\))?$/.exec(token)
-		if (token === "text" || token === "thinking") trigger[token] = true
+		if (token === "text" || token === "thinking") trigger[token] = !paths
 		else if (token === "tool" || token === "toolcall") trigger.tools.push(...TOOLS.map((name) => ({ tool: name })))
 		else if (tool && (TOOLS as readonly string[]).includes(tool[1] as string) && !(tool[1] === "bash" && tool[2])) {
 			trigger.tools.push({ tool: tool[1] as ToolName, ...(tool[2] ? { glob: globToRegExp(tool[2]) } : {}) })
@@ -324,16 +349,38 @@ function compileTrigger({ values, errors }: Fields): { trigger?: Trigger; proble
 	return { trigger }
 }
 
+/** The `globs` front matter: a glob, a comma-separated string or a list of them, as written and compiled. */
+function compileGlobs({ values, errors }: Fields): { globs?: string[]; paths?: RegExp[]; problem?: string } {
+	if (values.globs === undefined) return {}
+	if (errors.globs) return { problem: `globs cannot be read (${errors.globs})` }
+	const globs = typeof values.globs === "string" ? scopeTokens(values.globs) : values.globs.flatMap(scopeTokens)
+	if (globs.length === 0) return {}
+	const paths: RegExp[] = []
+	const invalid: string[] = []
+	for (const glob of globs) {
+		try {
+			paths.push(globToRegExp(glob))
+		} catch (error) {
+			invalid.push(`${JSON.stringify(glob)} (${message(error)})`)
+		}
+	}
+	return invalid.length > 0 ? { globs, problem: `invalid glob ${invalid.join(", ")}` } : { globs, paths }
+}
+
 export function parseRule(name: string, file: string, text: string): Rule {
 	const match = FRONT_MATTER.exec(text)
 	const front = match ? fields(match[1] ?? "") : { values: {}, errors: {} }
 	const description = front.values.description
-	const { trigger, problem } = compileTrigger(front)
+	const globs = compileGlobs(front)
+	// A rule whose globs cannot be used is not enforced at all: without its path gate, a trigger would fire too often.
+	const { trigger, problem } = globs.problem ? { trigger: undefined, problem: globs.problem } : compileTrigger(front, globs.paths)
 	return {
 		name,
 		file,
 		alwaysApply: front.values.alwaysApply === "true",
 		...(typeof description === "string" && description ? { description } : {}),
+		...(globs.globs ? { globs: globs.globs } : {}),
+		...(globs.paths ? { paths: globs.paths } : {}),
 		body: (match ? text.slice(match[0].length) : text).trim(),
 		...(trigger ? { trigger } : {}),
 		...(problem ? { problem } : {}),
@@ -361,10 +408,12 @@ export function loadRules(dir: string): Rule[] {
 
 const ruleText = (rule: Rule) => `## Rule: ${rule.name}\n\n${rule.body}`
 
-/** The text appended to the system prompt: always-on rules in full, then an index of the others. Empty without rules. */
+/** The text of the rules' system prompt section: always-on rules in full, then an index of the others. Empty without rules. */
 export function renderRules(rules: readonly Rule[]): string {
 	const sections = rules.filter((rule) => rule.alwaysApply).map(ruleText)
-	const index = rules.filter((rule) => !rule.alwaysApply).map((rule) => `- ${rule.name}: ${rule.description ?? "no description"} (${rule.file})`)
+	const index = rules
+		.filter((rule) => !rule.alwaysApply)
+		.map((rule) => `- ${rule.name}${rule.globs ? ` (${rule.globs.join(", ")})` : ""}: ${rule.description ?? "no description"} (${rule.file})`)
 	if (index.length > 0) sections.push(["## Rules to read on demand", "", "Read a rule's file before work that its description covers.", "", ...index].join("\n"))
 	return sections.join("\n\n")
 }
@@ -377,14 +426,30 @@ function callTexts(tool: ToolName, input: Record<string, unknown>): string[] {
 	return own.filter((text): text is string => typeof text === "string")
 }
 
-/** Whether a tool call falls under the trigger: a scope names the tool, its glob (if any) takes the path, a condition matches. */
+/** The call's `path` as given, absolute, relative to the cwd, and as a base name; none without a path. */
+function pathCandidates(input: Record<string, unknown>, cwd: string): string[] {
+	if (typeof input.path !== "string") return []
+	const absolute = resolve(cwd, input.path)
+	return [input.path, absolute, relative(cwd, absolute), basename(absolute)]
+}
+
+/** Whether a `read`, `edit` or `write` call names a file that one of `paths` matches. */
+export function matchesFile(paths: readonly RegExp[], toolName: string, input: Record<string, unknown>, cwd: string): boolean {
+	if (!FILE_TOOLS.includes(toolName)) return false
+	const candidates = pathCandidates(input, cwd)
+	return paths.some((path) => candidates.some((candidate) => path.test(candidate)))
+}
+
+/**
+ * Whether a tool call falls under the trigger: a scope names the tool, its glob (if any) takes the path, the rule's
+ * globs (if any) take the path, and a condition matches.
+ */
 export function matchesToolCall(trigger: Trigger, toolName: string, input: Record<string, unknown>, cwd: string): boolean {
 	const scopes = trigger.tools.filter((scope) => scope.tool === toolName)
 	if (scopes.length === 0) return false
-	const file = typeof input.path === "string" ? input.path : undefined
-	const absolute = file === undefined ? undefined : resolve(cwd, file)
-	const paths = file === undefined || absolute === undefined ? [] : [file, absolute, relative(cwd, absolute), basename(absolute)]
+	const paths = pathCandidates(input, cwd)
 	if (!scopes.some((scope) => !scope.glob || paths.some((candidate) => scope.glob?.test(candidate)))) return false
+	if (trigger.paths && !trigger.paths.some((path) => paths.some((candidate) => path.test(candidate)))) return false
 	const texts = callTexts(toolName as ToolName, input)
 	return trigger.conditions.some((condition) => texts.some((text) => condition.test(text)))
 }
@@ -396,22 +461,69 @@ export interface Deps {
 	warn?: (message: string) => void
 }
 
+/** The package a pi tree belongs to: the `name` in its package.json, or the directory's name without one. */
+export function packageId(root: string): string {
+	const manifest = join(root, "package.json")
+	const name = existsSync(manifest) ? (JSON.parse(readFileSync(manifest, "utf8")) as { name?: unknown }).name : undefined
+	return typeof name === "string" && name ? name : basename(root)
+}
+
+/**
+ * The system prompt section that holds a package's rules. pi accepts section names matching `[a-z][a-z0-9_-]*` and
+ * renders each section as `<name>…</name>`; the `rules_` prefix keeps it clear of pi's own sections, one of which is `rules`.
+ */
+export function sectionName(id: string): string {
+	return `rules_${id.toLowerCase().replace(/^@/, "").replace(/[^a-z0-9_-]+/g, "_")}`
+}
+
+/** The copy of each package that owns a session, keyed by session id and package, across every copy in this process. */
+const OWNERS = Symbol.for("@srobroek/harness-kit/pi-rules/owners")
+
+function owners(): Map<string, object> {
+	const store = globalThis as unknown as Record<symbol, Map<string, object> | undefined>
+	store[OWNERS] ??= new Map()
+	return store[OWNERS]
+}
+
 export default function rulesExtension(pi: Api, deps: Deps = {}): void {
 	const root = deps.root ?? join(dirname(fileURLToPath(import.meta.url)), "..")
 	const warn = deps.warn ?? ((text: string) => console.warn(`rules: ${text}`))
 	const rules = loadRules(join(root, "rules"))
+	if (rules.length === 0) return
 	for (const rule of rules) if (rule.problem) warn(`${rule.file}: ${rule.problem}; the rule stays in the index but is not enforced`)
+	const id = packageId(root)
+	const section = sectionName(id)
 	const text = renderRules(rules)
-	if (text) pi.on("before_agent_start", (event) => ({ systemPrompt: `${event.systemPrompt}\n\n${text}` }))
+
+	// pi dedupes an extension path, but two copies of the package (say one installed for the user, one for the project)
+	// both load. The first copy to see a session claims it; the others leave that session alone.
+	const self = {}
+	const sessionKey = (ctx: Context) => `${ctx.sessionManager.getSessionId()}\n${id}`
+	const owns = (ctx: Context) => {
+		const key = sessionKey(ctx)
+		const owner = owners().get(key) ?? self
+		owners().set(key, owner)
+		return owner === self
+	}
+	pi.on("session_shutdown", (_event, ctx) => {
+		const key = sessionKey(ctx)
+		if (owners().get(key) === self) owners().delete(key)
+	})
+	// pi rebuilds the sections for each run and diffs them against what the model has, so the same text sends nothing.
+	pi.on("before_agent_start", (event, ctx) => {
+		if (owns(ctx)) event.systemPromptOptions.sections[section] = text
+	})
 
 	const toolRules = rules.filter((rule) => (rule.trigger?.tools.length ?? 0) > 0)
 	const proseRules = rules.filter((rule) => rule.trigger?.text || rule.trigger?.thinking)
-	if (toolRules.length === 0 && proseRules.length === 0) return
+	// A triggered rule's globs are its path gate, so only an untriggered one is delivered by path.
+	const fileRules = rules.flatMap((rule) => (!rule.alwaysApply && !rule.trigger && !rule.problem && rule.paths ? [{ rule, paths: rule.paths }] : []))
+	if (toolRules.length === 0 && proseRules.length === 0 && fileRules.length === 0) return
 
 	/** Rules delivered in this session; each fires once. */
 	const fired = new Set<string>()
-	/** Non-interrupting rules waiting for the result of the call they matched. */
-	const reminders = new Map<string, Rule[]>()
+	/** The reminder each tool call gets appended to its result: its non-interrupting rules and the rules for its file. */
+	const reminders = new Map<string, string>()
 	/** Streamed text and thinking of the current assistant message, by content block. */
 	const buffers = new Map<string, string>()
 	pi.on("session_start", () => {
@@ -420,25 +532,30 @@ export default function rulesExtension(pi: Api, deps: Deps = {}): void {
 		buffers.clear()
 	})
 
-	if (toolRules.length > 0) {
+	if (toolRules.length > 0 || fileRules.length > 0) {
 		pi.on("tool_call", (event, ctx) => {
+			if (!owns(ctx)) return undefined
 			const matched = toolRules.filter((rule) => !fired.has(rule.name) && rule.trigger && matchesToolCall(rule.trigger, event.toolName, event.input, ctx.cwd))
-			if (matched.length === 0) return undefined
 			const blocking = matched.filter((rule) => rule.trigger?.interrupt === "always" || rule.trigger?.interrupt === "tool-only")
-			const delivered = blocking.length > 0 ? blocking : matched
-			for (const rule of delivered) fired.add(rule.name)
-			if (blocking.length === 0) {
-				reminders.set(event.toolCallId, matched)
-				return undefined
+			if (blocking.length > 0) {
+				// A blocked call gets no result, so the other rules wait for the retry.
+				for (const rule of blocking) fired.add(rule.name)
+				return { block: true, reason: ["This call was blocked before it ran, by the rule below.", ...blocking.map(ruleText), "Retry the call if it still applies."].join("\n\n") }
 			}
-			return { block: true, reason: ["This call was blocked before it ran, by the rule below.", ...blocking.map(ruleText), "Retry the call if it still applies."].join("\n\n") }
+			const covered = fileRules.filter(({ rule, paths }) => !fired.has(rule.name) && matchesFile(paths, event.toolName, event.input, ctx.cwd)).map(({ rule }) => rule)
+			for (const rule of [...matched, ...covered]) fired.add(rule.name)
+			const parts = [
+				...(matched.length > 0 ? ["This call matched the rule below.", ...matched.map(ruleText)] : []),
+				...(covered.length > 0 ? [`This call's file falls under the rule${covered.length > 1 ? "s" : ""} below.`, ...covered.map(ruleText)] : []),
+			]
+			if (parts.length > 0) reminders.set(event.toolCallId, parts.join("\n\n"))
+			return undefined
 		})
 		pi.on("tool_result", (event) => {
-			const matched = reminders.get(event.toolCallId)
-			if (!matched) return undefined
+			const reminder = reminders.get(event.toolCallId)
+			if (reminder === undefined) return undefined
 			reminders.delete(event.toolCallId)
-			const reminder = { type: "text", text: ["This call matched the rule below.", ...matched.map(ruleText)].join("\n\n") }
-			return { content: [...event.content, reminder], ...(event.structuredContent !== undefined ? { structuredContent: event.structuredContent } : {}) }
+			return { content: [...event.content, { type: "text", text: reminder }], ...(event.structuredContent !== undefined ? { structuredContent: event.structuredContent } : {}) }
 		})
 	}
 
@@ -446,10 +563,10 @@ export default function rulesExtension(pi: Api, deps: Deps = {}): void {
 		pi.on("message_start", (event) => {
 			if (event.message?.role === "assistant") buffers.clear()
 		})
-		pi.on("message_update", (event) => {
+		pi.on("message_update", (event, ctx) => {
 			const update = event.assistantMessageEvent
 			const source: Source | undefined = update?.type.startsWith("text_") ? "text" : update?.type.startsWith("thinking_") ? "thinking" : undefined
-			if (!update || !source) return
+			if (!update || !source || !owns(ctx)) return
 			const key = `${source}:${update.contentIndex ?? 0}`
 			const buffer = update.type.endsWith("_delta") ? (buffers.get(key) ?? "") + (update.delta ?? "") : update.type.endsWith("_end") ? update.content : undefined
 			if (buffer === undefined) return
