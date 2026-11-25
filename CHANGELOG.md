@@ -1,3 +1,9 @@
+## [1.11.0](https://github.com/srobroek/harness-kit/compare/v1.10.1...v1.11.0) (2026-11-25)
+
+### Features
+
+* **pi:** put rules in a per-package prompt section and deliver globs rules with matching files ([f7e2436](https://github.com/srobroek/harness-kit/commit/f7e2436a10e632096e9349b1cc4a5ee2c9cf21e4))
+
 ## [1.10.1](https://github.com/srobroek/harness-kit/compare/v1.10.0...v1.10.1) (2026-11-24)
 
 ### Bug Fixes
